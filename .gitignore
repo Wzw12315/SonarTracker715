@@ -1,0 +1,46 @@
+# ===================== 通用垃圾文件 =====================
+# 编译产物
+*.o
+*.so
+*.a
+*.out
+*.exe
+*.dll
+*.raw
+/build/
+/dist/
+/bin/
+/lib/
+/data/
+# 临时文件
+*.tmp
+*.log
+*.swp
+*.swo
+*~
+.DS_Store  # Mac文件
+Thumbs.db  # Windows文件
+
+# 配置/缓存文件
+/.env.local
+/.env.prod
+/.cache/
+/.config/
+/node_modules/  # 若有Node.js依赖
+/__pycache__/   # 若有Python代码
+/.venv/         # Python虚拟环境
+
+# ===================== 声呐项目专属（按需补充）=====================
+# 数据文件
+*.mat
+*.dat
+*.h5
+*.csv~
+/temp_data/
+/raw_data/
+# 日志/输出文件
+/logs/
+/results/old/
+# 编译中间文件
+/cmake-build-debug/
+/CMakeCache.txt
