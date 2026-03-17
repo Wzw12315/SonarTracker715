@@ -203,19 +203,19 @@ void MainWindow::setupUi() {
     fFreq->addRow("长窗FFT (分析):", m_editNfftWin = new QLineEdit("30000"));
     paramLayout->addWidget(gFreq);
 
-    // 【新增 UI】：空间谱方位检测的参数面板
+    // 【同步自 MATLAB 参数】
     QGroupBox* gAzDet = new QGroupBox("空间谱方位寻峰门限", paramContainer);
     QFormLayout* fAzDet = new QFormLayout(gAzDet);
-    fAzDet->addRow("背景噪声容限乘子:", m_editAzDetBgMult = new QLineEdit("5.0"));
+    fAzDet->addRow("背景噪声容限乘子:", m_editAzDetBgMult = new QLineEdit("8.0")); // 同步自 max(bg_noise_level + 8, ...)
     fAzDet->addRow("旁瓣抑制比 (线性):", m_editAzDetSidelobeRatio = new QLineEdit("0.02"));
-    fAzDet->addRow("寻峰最小点距:", m_editAzDetPeakMinDist = new QLineEdit("10"));
+    fAzDet->addRow("寻峰最小点距:", m_editAzDetPeakMinDist = new QLineEdit("3")); // 同步自 'MinPeakDistance', 3
     paramLayout->addWidget(gAzDet);
 
     QGroupBox* gLofarExt = new QGroupBox("实时 LOFAR 线谱提取", paramContainer);
     QFormLayout* fLofarExt = new QFormLayout(gLofarExt);
-    fLofarExt->addRow("背景估计中值窗宽:", m_editLofarBgMedWindow = new QLineEdit("150"));
-    fLofarExt->addRow("SNR 阈值乘数:", m_editLofarSnrThreshMult = new QLineEdit("2.5"));
-    fLofarExt->addRow("寻峰最小点数间距:", m_editLofarPeakMinDist = new QLineEdit("30"));
+    fLofarExt->addRow("背景估计中值窗宽:", m_editLofarBgMedWindow = new QLineEdit("60")); // 同步自 medfilt1(spectrum_db, 60)
+    fLofarExt->addRow("SNR 阈值乘数:", m_editLofarSnrThreshMult = new QLineEdit("2.0")); // 同步自 mean(snr_db) + 2.0 * std(snr_db)
+    fLofarExt->addRow("寻峰最小点数间距:", m_editLofarPeakMinDist = new QLineEdit("15")); // 同步自 'MinPeakDistance', 15
     paramLayout->addWidget(gLofarExt);
 
     QGroupBox* gDemon = new QGroupBox("DEMON 包络数字滤波", paramContainer);
@@ -227,7 +227,7 @@ void MainWindow::setupUi() {
     QGroupBox* gDp = new QGroupBox("TPSW 与 DP 轨迹寻优", paramContainer);
     QFormLayout* fDp = new QFormLayout(gDp);
     fDp->addRow("TPSW 保护窗 (G):", m_editTpswG = new QLineEdit("45"));
-    fDp->addRow("TPSW 排除窗 (E):", m_editTpswE = new QLineEdit("5"));
+    fDp->addRow("TPSW 排除窗 (E):", m_editTpswE = new QLineEdit("10")); // 同步自 detect_line_spectrum_from_lofar_change2 默认 E=10
     fDp->addRow("TPSW 补偿因子 (C):", m_editTpswC = new QLineEdit("1.15"));
     fDp->addRow("DP 记忆窗长 (L):", m_editDpL = new QLineEdit("11"));
     fDp->addRow("惩罚因子 Alpha:", m_editDpAlpha = new QLineEdit("0.6"));
@@ -237,7 +237,7 @@ void MainWindow::setupUi() {
 
     QGroupBox* gDcv = new QGroupBox("高分辨反卷积 (DCV) 设置", paramContainer);
     QFormLayout* fDcv = new QFormLayout(gDcv);
-    fDcv->addRow("RL 迭代次数:", m_editDcvRlIter = new QLineEdit("25"));
+    fDcv->addRow("RL 迭代次数:", m_editDcvRlIter = new QLineEdit("25")); // 同步自 rl_iter = 25
     paramLayout->addWidget(gDcv);
 
     paramScroll->setWidget(paramContainer);
@@ -345,7 +345,6 @@ void MainWindow::setupUi() {
     resize(1600, 1000);
     setWindowTitle("SonarTracker715 - 宽带方位动态跟踪与解耦系统");
 }
-
 void MainWindow::onSelectFilesClicked() {
     QString dir = QFileDialog::getExistingDirectory(this, "选择数据根目录", "");
     if (dir.isEmpty()) return;

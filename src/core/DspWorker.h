@@ -38,5 +38,5 @@ private:
     std::atomic<bool> m_isPaused;
 
     // 【新增】：定义批处理大小
-        int m_batchSize = 55;
+        int m_batchSize = 10;
 };

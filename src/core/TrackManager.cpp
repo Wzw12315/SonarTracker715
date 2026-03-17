@@ -6,7 +6,7 @@
 TrackManager::TrackManager() : internal_id_counter(0), confirmed_target_count(0) {
     // 基础配置
     ASSOCIATION_GATE = 6.0;  // 关联波门阈值
-    M_HITS = 3;             // 【对齐 MATLAB】: 从 2 提升至 3，要求连续命中 3 帧才能转正
+    M_HITS = 10;             // 【对齐 MATLAB】: 从 2 提升至 3，要求连续命中 3 帧才能转正
 }
 
 QList<TargetTrack> TrackManager::updateTracks(const std::vector<double>& detected_angles,

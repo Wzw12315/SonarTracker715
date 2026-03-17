@@ -5,6 +5,7 @@
 #include <QString>
 #include <vector>
 #include <unordered_map>
+#include <random> // 【新增】：引入随机数库
 #include <Eigen/Dense>
 #include "DataTypes.h"
 
@@ -13,16 +14,9 @@ class SelfValidator : public QObject {
 public:
     explicit SelfValidator(QObject *parent = nullptr);
 
-    // 从 JSON 加载真值
     void loadTruthData(const QString& filePath);
-
-    // 从本地直接加载 Kraken_Cache.raw 二进制字典
     void loadReplicaFields(const QString& rawPath);
-
-    // 运动学计算：推算真实方位
     double calculateTheoreticalAngle(int targetId, double timeSeconds);
-
-    // MFP匹配场计算：模拟接收信号并评估计算深度
     double estimateDepthMFP(double true_depth, double true_range_km, const std::vector<double>& freqs);
 
 public slots:
@@ -33,16 +27,14 @@ signals:
 
 private:
     std::vector<TargetTruth> m_truthData;
-
-    // 场库维度信息
     int m_N_array;
     int m_N_depth;
     int m_N_range;
     std::vector<double> m_depthCopy;
     std::vector<double> m_rangeCopy;
-
-    // 拷贝场字典：Key 为频率，Value 为 [阵元数 x (深度点*距离点)] 的归一化大型复数矩阵
     std::unordered_map<int, Eigen::MatrixXcf> m_replicaDict;
+
+    std::mt19937 m_randGen; // 【新增】：全局随机数引擎，避免每次重新播种产生相同的假随机序列
 
     void initDefaultTruthData();
 };

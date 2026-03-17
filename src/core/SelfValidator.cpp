@@ -15,15 +15,15 @@
 #endif
 
 SelfValidator::SelfValidator(QObject *parent) : QObject(parent), m_N_array(0), m_N_depth(0), m_N_range(0) {
+    // 【关键修复 1】：使用系统高精度时钟作为种子，彻底解决 MinGW 下伪随机序列锁死的问题
+    unsigned seed = std::chrono::system_clock::now().time_since_epoch().count();
+    m_randGen.seed(seed);
+
     initDefaultTruthData();
 
-    // 【修改这里】：动态获取可执行文件所在的目录，并拼接文件名
     QString appDir = QCoreApplication::applicationDirPath();
     QString rawPath = QDir(appDir).filePath("Kraken_Cache.raw");
-
     qDebug() << "正在尝试加载 Kraken RAW 文件，路径:" << rawPath;
-
-    // 初始化时自动尝试加载本地的 RAW 文件
     loadReplicaFields(rawPath);
 }
 
@@ -155,14 +155,13 @@ double SelfValidator::calculateTheoreticalAngle(int targetId, double timeSeconds
     return angleDeg;
 }
 
+
 // =========================================================================
 // 核心：模拟接受信号 + 匹配场深度反演 (矩阵数学提速版)
 // =========================================================================
 double SelfValidator::estimateDepthMFP(double true_depth, double true_range_km, const std::vector<double>& freqs) {
-    // 若场库尚未加载成功，退化为默认保护值
     if (m_replicaDict.empty() || m_N_depth == 0 || m_N_range == 0) return 10.0;
 
-    // 1. 根据真实深度和距离，寻找最近的网格索引
     int depth_idx = 0; double min_d = 1e9;
     for(int i=0; i<m_N_depth; ++i) {
         if(std::abs(m_depthCopy[i] - true_depth) < min_d) { min_d = std::abs(m_depthCopy[i] - true_depth); depth_idx = i; }
@@ -173,53 +172,51 @@ double SelfValidator::estimateDepthMFP(double true_depth, double true_range_km, 
         if(std::abs(m_rangeCopy[i] - true_range_km) < min_r) { min_r = std::abs(m_rangeCopy[i] - true_range_km); range_idx = i; }
     }
 
-    // 确定真实的 1D 网格索引 (由于数据是按 N_depth x N_range 扁平化存放的)
     int true_grid_idx = range_idx * m_N_depth + depth_idx;
-
     Eigen::VectorXf CMFP_broadband = Eigen::VectorXf::Zero(m_N_depth * m_N_range);
     bool computed = false;
 
-    // 随机噪声引擎
-    std::default_random_engine gen(std::random_device{}());
-
-    // 2. 遍历计算到的该目标的宽带频点
     for (double freq : freqs) {
-        int f_key = std::round(freq);
-        if (m_replicaDict.find(f_key) == m_replicaDict.end()) continue; // 频点不在场库中
+        // 【关键修复】：寻找字典中最接近的频率键值，而不是死板的整数匹配
+        int best_f_key = -1;
+        double min_f_diff = 1e9;
+        for (auto const& pair : m_replicaDict) {
+            double diff = std::abs(pair.first - freq);
+            if (diff < min_f_diff) {
+                min_f_diff = diff;
+                best_f_key = pair.first;
+            }
+        }
 
-        const Eigen::MatrixXcf& W = m_replicaDict[f_key]; // [N_array x 全局网格数]
+        // 如果提取出的线谱与真值库频率相差超过 3.5Hz，说明是干扰或虚警提取，跳过不参与匹配
+        if (best_f_key == -1 || min_f_diff > 3.5) continue;
 
-        // 提取该目标的理论原始传播向量
+        const Eigen::MatrixXcf& W = m_replicaDict[best_f_key];
         Eigen::VectorXcf w_true = W.col(true_grid_idx);
 
-        // 注入加性高斯白噪声 (SNR = 10dB)
         double SNR = 10.0;
-        double signal_power = 1.0 / m_N_array; // 因为 W 是归一化的，均方功率为 1/M
+        double signal_power = 1.0 / m_N_array;
         double noise_power = signal_power / std::pow(10.0, SNR / 10.0);
         double noise_std = std::sqrt(noise_power / 2.0);
         std::normal_distribution<float> dist(0.0, noise_std);
 
         Eigen::VectorXcf p_noisy(m_N_array);
         for(int i = 0; i < m_N_array; ++i) {
-            p_noisy(i) = w_true(i) + std::complex<float>(dist(gen), dist(gen));
+            // 使用全局高精度引擎注入噪声
+            p_noisy(i) = w_true(i) + std::complex<float>(dist(m_randGen), dist(m_randGen));
         }
         p_noisy.normalize();
 
-        // 提速数学核心：diag(W^H * R * W) 当 R = p*p^H 时，恒等于 |W^H * p|^2
-        // 这将计算复杂度从 O(M^2 * N_grids) 瞬间降低至 O(M * N_grids)
         Eigen::VectorXf CMFP_single = (W.adjoint() * p_noisy).cwiseAbs2();
-
         CMFP_broadband += CMFP_single;
         computed = true;
     }
 
+    // 如果所有的频点都没匹配上字典库，触发保护值
     if (!computed) return 10.0;
 
-    // 3. 寻找全场匹配极值
     int max_idx;
     CMFP_broadband.maxCoeff(&max_idx);
-
-    // 由扁平化 1D 索引反推深度索引 (按列排布：行变化最快)
     int best_depth_idx = max_idx % m_N_depth;
 
     return m_depthCopy[best_depth_idx];

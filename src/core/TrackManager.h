@@ -15,7 +15,7 @@ public:
 
 private:
     double ASSOCIATION_GATE = 6.0; // 关联波门阈值 6.0 度
-    int M_HITS = 5;                // 【新增】：M/N 逻辑，累积命中 2 次即判定为真目标
+    int M_HITS = 10;                // 【新增】：M/N 逻辑，累积命中 2 次即判定为真目标
 
     int internal_id_counter;       // 系统内部试探目标流水号
     int confirmed_target_count;    // 真正展示给用户的确实目标数量

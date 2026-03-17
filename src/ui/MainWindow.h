@@ -13,7 +13,7 @@
 #include <QTabWidget>
 #include "qcustomplot.h"
 #include "../core/DspWorker.h"
-#include "../core/SelfValidator.h" // 【新增】：引入自校验模块
+#include "../core/SelfValidator.h"
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -23,7 +23,7 @@ public:
 
 private slots:
     void onSelectFilesClicked();
-    void onLoadTruthClicked();   // 【新增】：导入 JSON 真值的槽函数
+    void onLoadTruthClicked();
     void onStartClicked();
     void onPauseResumeClicked();
     void onStopClicked();
@@ -62,6 +62,11 @@ private:
     QLineEdit* m_editNfftR;
     QLineEdit* m_editNfftWin;
 
+    // 【新增】：空间谱方位检测参数输入框
+    QLineEdit* m_editAzDetBgMult;
+    QLineEdit* m_editAzDetSidelobeRatio;
+    QLineEdit* m_editAzDetPeakMinDist;
+
     QLineEdit* m_editLofarBgMedWindow;
     QLineEdit* m_editLofarSnrThreshMult;
     QLineEdit* m_editLofarPeakMinDist;
@@ -81,7 +86,7 @@ private:
     QLineEdit* m_editDcvRlIter;
 
     QPushButton* m_btnSelectFiles;
-    QPushButton* m_btnLoadTruth; // 【新增】：先验真值导入按钮
+    QPushButton* m_btnLoadTruth;
     QPushButton* m_btnStart;
     QPushButton* m_btnPauseResume;
     QPushButton* m_btnStop;
@@ -108,7 +113,7 @@ private:
     QMap<int, QCustomPlot*> m_demonPlots;
 
     DspWorker* m_worker;
-    SelfValidator* m_validator; // 【新增】：自校验模块实体指针
+    SelfValidator* m_validator;
 
     QList<FrameResult> m_historyResults;
     QString m_currentDir;

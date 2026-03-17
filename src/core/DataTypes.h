@@ -22,6 +22,11 @@ struct DspConfig {
     int nfftR = 15000;
     int nfftWin = 30000;
 
+    // 【新增】：空间方位寻峰检测参数
+        double azDetBgMult = 5.0;         // 背景噪声容限乘子 (默认 5.0 倍 std)
+        double azDetSidelobeRatio = 0.02; // 旁瓣抑制比 (默认 0.02)
+        int azDetPeakMinDist = 2;        // 寻峰最小点数间距 (默认 2)
+
     int lofarBgMedWindow = 150;
     double lofarSnrThreshMult = 2.5;
     int lofarPeakMinDist = 30;
