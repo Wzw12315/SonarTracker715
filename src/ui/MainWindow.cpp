@@ -11,14 +11,18 @@
 #include <QMenu>
 #include <QAction>
 #include <QMouseEvent>
-#include <QFile>         // 【新增】：用于文件保存
-#include <QTextStream>   // 【新增】：用于文本流写入
-#include <QMessageBox>   // 【新增】：用于弹窗提示
+#include <QFile>
+#include <QTextStream>
+#include <QMessageBox>
 
-MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent), m_worker(new DspWorker(this)) {
+MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent),
+    m_worker(new DspWorker(this)),
+    m_validator(new SelfValidator(this))
+{
     setupUi();
 
     connect(m_btnSelectFiles, &QPushButton::clicked, this, &MainWindow::onSelectFilesClicked);
+    connect(m_btnLoadTruth, &QPushButton::clicked, this, &MainWindow::onLoadTruthClicked);
     connect(m_btnStart, &QPushButton::clicked, this, &MainWindow::onStartClicked);
     connect(m_btnPauseResume, &QPushButton::clicked, this, &MainWindow::onPauseResumeClicked);
     connect(m_btnStop, &QPushButton::clicked, this, &MainWindow::onStopClicked);
@@ -29,15 +33,18 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent), m_worker(new DspW
     connect(m_worker, &DspWorker::reportReady, this, &MainWindow::appendReport, Qt::QueuedConnection);
     connect(m_worker, &DspWorker::offlineResultsReady, this, &MainWindow::onOfflineResultsReady, Qt::QueuedConnection);
     connect(m_worker, &DspWorker::processingFinished, this, &MainWindow::onProcessingFinished, Qt::QueuedConnection);
+
+    connect(m_worker, &DspWorker::batchFinished,
+            m_validator, &SelfValidator::onBatchFinished, Qt::QueuedConnection);
+    connect(m_validator, &SelfValidator::validationLogReady,
+            this, &MainWindow::appendReport, Qt::QueuedConnection);
 }
 
 MainWindow::~MainWindow() {
-    m_worker->stop(); m_worker->wait();
+    m_worker->stop();
+    m_worker->wait();
 }
 
-// =========================================================================
-// 图表交互核心引擎
-// =========================================================================
 void MainWindow::setupPlotInteraction(QCustomPlot* plot) {
     if (!plot) return;
     plot->setInteractions(QCP::iRangeDrag | QCP::iRangeZoom);
@@ -133,8 +140,6 @@ void MainWindow::onPlotDoubleClick(QMouseEvent *event) {
     plot->replot();
 }
 
-// =========================================================================
-
 void MainWindow::setupUi() {
     QWidget* centralWidget = new QWidget(this);
     QVBoxLayout* mainVLayout = new QVBoxLayout(centralWidget);
@@ -144,9 +149,6 @@ void MainWindow::setupUi() {
     QHBoxLayout* topLayout = new QHBoxLayout(topWidget);
     topLayout->setContentsMargins(0, 0, 0, 0);
 
-    // ==========================================
-    // 左侧：专业级参数配置面板
-    // ==========================================
     QWidget* leftPanel = new QWidget(topWidget);
     leftPanel->setFixedWidth(350);
     QVBoxLayout* leftLayout = new QVBoxLayout(leftPanel);
@@ -154,14 +156,24 @@ void MainWindow::setupUi() {
 
     QGroupBox* groupButtons = new QGroupBox("系统控制指令区", leftPanel);
     QVBoxLayout* btnLayout = new QVBoxLayout(groupButtons);
+
     m_btnSelectFiles = new QPushButton("📂 数据文件输入...", this);
-    m_btnStart = new QPushButton("▶ 开始算法处理", this);
+    m_btnLoadTruth   = new QPushButton("🎯 导入先验真值(JSON)...", this);
+    m_btnStart       = new QPushButton("▶ 开始算法处理", this);
     m_btnPauseResume = new QPushButton("⏸ 暂停/继续", this);
-    m_btnStop = new QPushButton("⏹ 终止算法", this);
-    m_btnExport = new QPushButton("💾 导出文本报表", this);
-    m_btnStart->setEnabled(false); m_btnPauseResume->setEnabled(false); m_btnStop->setEnabled(false);
-    btnLayout->addWidget(m_btnSelectFiles); btnLayout->addWidget(m_btnStart);
-    btnLayout->addWidget(m_btnPauseResume); btnLayout->addWidget(m_btnStop); btnLayout->addWidget(m_btnExport);
+    m_btnStop        = new QPushButton("⏹ 终止算法", this);
+    m_btnExport      = new QPushButton("💾 导出文本报表", this);
+
+    m_btnStart->setEnabled(false);
+    m_btnPauseResume->setEnabled(false);
+    m_btnStop->setEnabled(false);
+
+    btnLayout->addWidget(m_btnSelectFiles);
+    btnLayout->addWidget(m_btnLoadTruth);
+    btnLayout->addWidget(m_btnStart);
+    btnLayout->addWidget(m_btnPauseResume);
+    btnLayout->addWidget(m_btnStop);
+    btnLayout->addWidget(m_btnExport);
     leftLayout->addWidget(groupButtons);
 
     QScrollArea* paramScroll = new QScrollArea(leftPanel);
@@ -177,7 +189,7 @@ void MainWindow::setupUi() {
     fArray->addRow("阵元数量:", m_editM = new QLineEdit("512"));
     fArray->addRow("阵元间距 (m):", m_editD = new QLineEdit("1.2"));
     fArray->addRow("环境声速 (m/s):", m_editC = new QLineEdit("1500.0"));
-    fArray->addRow("聚焦半径 (m):", m_editRScan = new QLineEdit("9000.0"));
+    fArray->addRow("聚焦半径 (m):", m_editRScan = new QLineEdit("20000.0"));
     fArray->addRow("时间步进 (s):", m_editTimeStep = new QLineEdit("3.0"));
     paramLayout->addWidget(gArray);
 
@@ -190,6 +202,14 @@ void MainWindow::setupUi() {
     fFreq->addRow("短窗FFT (快拍):", m_editNfftR = new QLineEdit("15000"));
     fFreq->addRow("长窗FFT (分析):", m_editNfftWin = new QLineEdit("30000"));
     paramLayout->addWidget(gFreq);
+
+    // 【新增 UI】：空间谱方位检测的参数面板
+    QGroupBox* gAzDet = new QGroupBox("空间谱方位寻峰门限", paramContainer);
+    QFormLayout* fAzDet = new QFormLayout(gAzDet);
+    fAzDet->addRow("背景噪声容限乘子:", m_editAzDetBgMult = new QLineEdit("5.0"));
+    fAzDet->addRow("旁瓣抑制比 (线性):", m_editAzDetSidelobeRatio = new QLineEdit("0.02"));
+    fAzDet->addRow("寻峰最小点距:", m_editAzDetPeakMinDist = new QLineEdit("10"));
+    paramLayout->addWidget(gAzDet);
 
     QGroupBox* gLofarExt = new QGroupBox("实时 LOFAR 线谱提取", paramContainer);
     QFormLayout* fLofarExt = new QFormLayout(gLofarExt);
@@ -208,14 +228,13 @@ void MainWindow::setupUi() {
     QFormLayout* fDp = new QFormLayout(gDp);
     fDp->addRow("TPSW 保护窗 (G):", m_editTpswG = new QLineEdit("45"));
     fDp->addRow("TPSW 排除窗 (E):", m_editTpswE = new QLineEdit("5"));
-    fDp->addRow("TPSW 补偿因子 (C):", m_editTpswC = new QLineEdit("1.15")); // 【新增】：添加到布局
+    fDp->addRow("TPSW 补偿因子 (C):", m_editTpswC = new QLineEdit("1.15"));
     fDp->addRow("DP 记忆窗长 (L):", m_editDpL = new QLineEdit("11"));
     fDp->addRow("惩罚因子 Alpha:", m_editDpAlpha = new QLineEdit("0.6"));
     fDp->addRow("惩罚因子 Beta:", m_editDpBeta = new QLineEdit("1.5"));
     fDp->addRow("偏置因子 Gamma:", m_editDpGamma = new QLineEdit("0.1"));
     paramLayout->addWidget(gDp);
 
-    // 【新增】DCV 高分辨参数组
     QGroupBox* gDcv = new QGroupBox("高分辨反卷积 (DCV) 设置", paramContainer);
     QFormLayout* fDcv = new QFormLayout(gDcv);
     fDcv->addRow("RL 迭代次数:", m_editDcvRlIter = new QLineEdit("25"));
@@ -236,13 +255,9 @@ void MainWindow::setupUi() {
 
     topLayout->addWidget(leftPanel);
 
-    // ==========================================
-    // 右侧：全功能多标签绘图区
-    // ==========================================
     m_mainTabWidget = new QTabWidget(topWidget);
     topLayout->addWidget(m_mainTabWidget, 1);
 
-    // --- Tab 1: 实时动态 ---
     QWidget* tab1 = new QWidget();
     QHBoxLayout* tab1Layout = new QHBoxLayout(tab1);
     QSplitter* horizontalSplitter = new QSplitter(Qt::Horizontal, tab1);
@@ -250,7 +265,7 @@ void MainWindow::setupUi() {
     QWidget* midPanel = new QWidget(horizontalSplitter);
     QVBoxLayout* midLayout = new QVBoxLayout(midPanel);
     m_timeAzimuthPlot = new QCustomPlot(midPanel);
-    setupPlotInteraction(m_timeAzimuthPlot); // 【赋予交互】
+    setupPlotInteraction(m_timeAzimuthPlot);
     m_timeAzimuthPlot->addGraph();
     m_timeAzimuthPlot->graph(0)->setLineStyle(QCPGraph::lsNone);
     m_timeAzimuthPlot->graph(0)->setScatterStyle(QCPScatterStyle(QCPScatterStyle::ssCircle, Qt::red, Qt::black, 7));
@@ -265,7 +280,7 @@ void MainWindow::setupUi() {
     QVBoxLayout* rightLayout = new QVBoxLayout(rightPanel);
 
     m_spatialPlot = new QCustomPlot(rightPanel);
-    setupPlotInteraction(m_spatialPlot); // 【赋予交互】
+    setupPlotInteraction(m_spatialPlot);
     m_spatialPlot->setMinimumHeight(250); m_spatialPlot->setMaximumHeight(350);
     m_spatialPlot->addGraph(); m_spatialPlot->graph(0)->setName("CBF (常规波束)"); m_spatialPlot->graph(0)->setPen(QPen(Qt::gray, 2, Qt::DashLine));
     m_spatialPlot->addGraph(); m_spatialPlot->graph(1)->setName("DCV (高分辨)"); m_spatialPlot->graph(1)->setPen(QPen(Qt::blue, 2));
@@ -291,17 +306,15 @@ void MainWindow::setupUi() {
     tab1Layout->addWidget(horizontalSplitter);
     m_mainTabWidget->addTab(tab1, "💻 实时探测与关联");
 
-    // --- Tab 2: 纯净的 DCV 空间谱 ---
     QWidget* tab2 = new QWidget();
     m_tab2Layout = new QVBoxLayout(tab2);
     m_dcvWaterfallPlot = new QCustomPlot(tab2);
-    setupPlotInteraction(m_dcvWaterfallPlot); // 【赋予交互】
+    setupPlotInteraction(m_dcvWaterfallPlot);
     m_dcvWaterfallPlot->plotLayout()->insertRow(0);
     m_dcvWaterfallPlot->plotLayout()->addElement(0, 0, new QCPTextElement(m_dcvWaterfallPlot, "高分辨反卷积(DCV) 全方位时空谱历程", QFont("sans", 14, QFont::Bold)));
     m_tab2Layout->addWidget(m_dcvWaterfallPlot);
     m_mainTabWidget->addTab(tab2, "📊 后处理: 空间方位谱全景");
 
-    // --- Tab 3: 深度解耦分析 ---
     QWidget* tab3 = new QWidget();
     QVBoxLayout* tab3Layout = new QVBoxLayout(tab3);
     QScrollArea* lofarScroll = new QScrollArea(tab3);
@@ -315,9 +328,6 @@ void MainWindow::setupUi() {
 
     verticalSplitter->addWidget(topWidget);
 
-    // ==========================================
-    // 下半部分：综合评估终端
-    // ==========================================
     QGroupBox* groupReport = new QGroupBox("综合处理评估报告终端", verticalSplitter);
     QVBoxLayout* reportLayout = new QVBoxLayout(groupReport);
     m_reportConsole = new QPlainTextEdit(this);
@@ -333,7 +343,7 @@ void MainWindow::setupUi() {
 
     setCentralWidget(centralWidget);
     resize(1600, 1000);
-    setWindowTitle("SonarTrackerPro - 宽带方位动态跟踪与解耦系统");
+    setWindowTitle("SonarTracker715 - 宽带方位动态跟踪与解耦系统");
 }
 
 void MainWindow::onSelectFilesClicked() {
@@ -343,6 +353,14 @@ void MainWindow::onSelectFilesClicked() {
     m_lblSysInfo->setText(QString("状态: 就绪\n目录: %1").arg(dir));
     appendLog(QString("已选择目录: %1\n请点击【开始处理】...\n").arg(dir));
     m_btnStart->setEnabled(true);
+}
+
+void MainWindow::onLoadTruthClicked() {
+    QString fileName = QFileDialog::getOpenFileName(this, "选择先验真值文件", "", "JSON Files (*.json);;All Files (*)");
+    if (!fileName.isEmpty()) {
+        m_validator->loadTruthData(fileName);
+        appendLog(QString("\n>> 已成功加载先验真值配置: %1\n").arg(fileName));
+    }
 }
 
 void MainWindow::onStartClicked() {
@@ -362,6 +380,11 @@ void MainWindow::onStartClicked() {
     m_currentConfig.nfftR = m_editNfftR->text().toInt();
     m_currentConfig.nfftWin = m_editNfftWin->text().toInt();
 
+    // 【新增】：读取空间谱检测参数
+    m_currentConfig.azDetBgMult = m_editAzDetBgMult->text().toDouble();
+    m_currentConfig.azDetSidelobeRatio = m_editAzDetSidelobeRatio->text().toDouble();
+    m_currentConfig.azDetPeakMinDist = m_editAzDetPeakMinDist->text().toInt();
+
     m_currentConfig.lofarBgMedWindow = m_editLofarBgMedWindow->text().toInt();
     m_currentConfig.lofarSnrThreshMult = m_editLofarSnrThreshMult->text().toDouble();
     m_currentConfig.lofarPeakMinDist = m_editLofarPeakMinDist->text().toInt();
@@ -371,16 +394,15 @@ void MainWindow::onStartClicked() {
 
     m_currentConfig.tpswG = m_editTpswG->text().toDouble();
     m_currentConfig.tpswE = m_editTpswE->text().toDouble();
-    m_currentConfig.tpswC = m_editTpswC->text().toDouble(); // 【新增】：读取输入值
+    m_currentConfig.tpswC = m_editTpswC->text().toDouble();
     m_currentConfig.dpL = m_editDpL->text().toInt();
     m_currentConfig.dpAlpha = m_editDpAlpha->text().toDouble();
     m_currentConfig.dpBeta = m_editDpBeta->text().toDouble();
     m_currentConfig.dpGamma = m_editDpGamma->text().toDouble();
 
-    // 【新增】DCV 迭代次数
     m_currentConfig.dcvRlIter = m_editDcvRlIter->text().toInt();
 
-    m_btnStart->setEnabled(false); m_btnSelectFiles->setEnabled(false);
+    m_btnStart->setEnabled(false); m_btnSelectFiles->setEnabled(false); m_btnLoadTruth->setEnabled(false);
     m_btnPauseResume->setEnabled(true); m_btnStop->setEnabled(true);
     m_mainTabWidget->setCurrentIndex(0);
     m_lblSysInfo->setText(QString("状态: 运行中\n开始时间: %1").arg(QDateTime::currentDateTime().toString("HH:mm:ss")));
@@ -422,14 +444,11 @@ void MainWindow::onPauseResumeClicked() {
 void MainWindow::onStopClicked() {
     if (m_worker->isRunning()) {
         m_worker->stop(); m_lblSysInfo->setText("状态: 已手动终止"); appendLog("\n>> 接收到终止指令...\n");
-        m_btnStart->setEnabled(true); m_btnSelectFiles->setEnabled(true);
+        m_btnStart->setEnabled(true); m_btnSelectFiles->setEnabled(true); m_btnLoadTruth->setEnabled(true);
         m_btnPauseResume->setEnabled(false); m_btnStop->setEnabled(false);
     }
 }
 
-// =========================================================================
-// 实现文本报表一键导出功能 (修复了中文乱码问题)
-// =========================================================================
 void MainWindow::onExportClicked() {
     if (m_reportConsole->toPlainText().isEmpty() && m_logConsole->toPlainText().isEmpty()) {
         QMessageBox::warning(this, "导出失败", "当前没有可导出的报表或日志数据！");
@@ -455,8 +474,8 @@ void MainWindow::onExportClicked() {
     out.setGenerateByteOrderMark(true);
 
     out << "======================================================\n";
-    out << QString("          SonarTrackerPro 综合分析导出报表\n");
-    out << QString("          导出时间: ") << QDateTime::currentDateTime().toString("yyyy-MM-dd HH:mm:ss") << "\n";
+    out << QString("         SonarTracker715 综合分析导出报表\n");
+    out << QString("         导出时间: ") << QDateTime::currentDateTime().toString("yyyy-MM-dd HH:mm:ss") << "\n";
     out << "======================================================\n\n";
 
     out << QString("【一、综合评估终端结果】\n");
@@ -539,13 +558,12 @@ void MainWindow::onFrameProcessed(const FrameResult& result) {
             if (!t.lineSpectrumAmp.isEmpty()) {
                 lsp->graph(0)->setData(f_lofar, t.lineSpectrumAmp);
                 lsp->graph(0)->setPen(QPen(lsColor, 1.5));
-                lsp->yAxis->rescale(); // 【核心：允许自适应】
-                // 增加 5dB 的显示缓冲边距，防止顶到天花板
+                lsp->yAxis->rescale();
                 lsp->yAxis->setRange(lsp->yAxis->range().lower - 5, lsp->yAxis->range().upper + 5);
             }
             lp->graph(0)->setData(f_lofar, t.lofarSpectrum);
             lp->graph(0)->setPen(QPen(lofarColor, 1.5));
-            lp->yAxis->rescale(); // 【核心：允许自适应】
+            lp->yAxis->rescale();
             lp->yAxis->setRange(lp->yAxis->range().lower - 5, lp->yAxis->range().upper + 5);
 
             lsp->replot();
@@ -562,6 +580,7 @@ void MainWindow::onFrameProcessed(const FrameResult& result) {
         updatePlotOriginalRange(dp);
     }
 }
+
 void MainWindow::appendLog(const QString& log) { m_logConsole->appendPlainText(log); m_logConsole->moveCursor(QTextCursor::End); }
 void MainWindow::appendReport(const QString& report) { m_reportConsole->appendPlainText(report); m_reportConsole->moveCursor(QTextCursor::End); }
 
@@ -618,7 +637,7 @@ void MainWindow::onOfflineResultsReady(const QList<OfflineTargetResult>& results
 
 void MainWindow::onProcessingFinished() {
     m_lblSysInfo->setText(QString("状态: 分析完成\n结束时间: %1").arg(QDateTime::currentDateTime().toString("HH:mm:ss")));
-    m_btnStart->setEnabled(true); m_btnSelectFiles->setEnabled(true);
+    m_btnStart->setEnabled(true); m_btnSelectFiles->setEnabled(true); m_btnLoadTruth->setEnabled(true);
     m_btnPauseResume->setEnabled(false); m_btnStop->setEnabled(false);
 
     if (m_historyResults.isEmpty()) return;

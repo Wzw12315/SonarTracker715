@@ -13,6 +13,7 @@
 #include <QTabWidget>
 #include "qcustomplot.h"
 #include "../core/DspWorker.h"
+#include "../core/SelfValidator.h" // 【新增】：引入自校验模块
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -22,6 +23,7 @@ public:
 
 private slots:
     void onSelectFilesClicked();
+    void onLoadTruthClicked();   // 【新增】：导入 JSON 真值的槽函数
     void onStartClicked();
     void onPauseResumeClicked();
     void onStopClicked();
@@ -32,7 +34,7 @@ private slots:
     void onOfflineResultsReady(const QList<OfflineTargetResult>& results);
     void onProcessingFinished();
 
-    // 【新增】：图表交互事件槽函数
+    // 图表交互事件槽函数
     void onPlotContextMenu(const QPoint &pos);
     void onPlotMouseMove(QMouseEvent *event);
     void onPlotDoubleClick(QMouseEvent *event);
@@ -41,7 +43,7 @@ private:
     void setupUi();
     void createTargetPlots(int targetId);
 
-    // 【新增】：为图表注入交互灵魂的工具函数
+    // 为图表注入交互灵魂的工具函数
     void setupPlotInteraction(QCustomPlot* plot);
     void updatePlotOriginalRange(QCustomPlot* plot);
 
@@ -69,16 +71,17 @@ private:
 
     QLineEdit* m_editTpswG;
     QLineEdit* m_editTpswE;
-    QLineEdit* m_editTpswC; // 【新增】：参数输入框指针
+    QLineEdit* m_editTpswC;
     QLineEdit* m_editDpL;
     QLineEdit* m_editDpAlpha;
     QLineEdit* m_editDpBeta;
     QLineEdit* m_editDpGamma;
 
-    // 【新增】DCV 迭代次数参数输入框
+    // DCV 迭代次数参数输入框
     QLineEdit* m_editDcvRlIter;
 
     QPushButton* m_btnSelectFiles;
+    QPushButton* m_btnLoadTruth; // 【新增】：先验真值导入按钮
     QPushButton* m_btnStart;
     QPushButton* m_btnPauseResume;
     QPushButton* m_btnStop;
@@ -105,6 +108,8 @@ private:
     QMap<int, QCustomPlot*> m_demonPlots;
 
     DspWorker* m_worker;
+    SelfValidator* m_validator; // 【新增】：自校验模块实体指针
+
     QList<FrameResult> m_historyResults;
     QString m_currentDir;
     DspConfig m_currentConfig;

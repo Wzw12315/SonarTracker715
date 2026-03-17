@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.5)
-project(SonarTrackerPro LANGUAGES CXX)
+project(SonarTracker715 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 14)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -56,6 +56,9 @@ set(SOURCES
     src/core/fir2.cpp
     3rdparty/qcustomplot/qcustomplot.cpp
     3rdparty/qcustomplot/qcustomplot.h
+
+    src/core/SelfValidator.h
+    src/core/SelfValidator.cpp
 )
 
 add_executable(${PROJECT_NAME} ${SOURCES})

@@ -51,6 +51,8 @@ static Eigen::VectorXd medfilt1(const Eigen::VectorXd& x, int w) {
 DspWorker::DspWorker(QObject *parent) : QThread(parent), m_isRunning(false), m_isPaused(false) {
     qRegisterMetaType<FrameResult>("FrameResult");
     qRegisterMetaType<QList<OfflineTargetResult>>("QList<OfflineTargetResult>");
+    // 【新增】：向 Qt 元对象系统注册批处理特征载体，以便跨线程安全发送信号
+        qRegisterMetaType<std::vector<BatchTargetFeature>>("std::vector<BatchTargetFeature>");
 }
 DspWorker::~DspWorker() { stop(); wait(); }
 void DspWorker::setDirectory(const QString& dirPath) { m_directory = dirPath; }
@@ -118,19 +120,24 @@ void DspWorker::run() {
     TrackManager trackManager;
     std::vector<FrameResult> history_frames;
 
+    // 【新增】：专门用于缓存当前批次的帧数据
+    std::vector<FrameResult> batch_frames;
+
     QMap<int, QVector<double>> lastLofar;
     QMap<int, QVector<double>> lastDemon;
     QMap<int, QVector<double>> lastLineAmp;
     QMap<int, QVector<double>> lastLofarFull;
 
     int frameIndex = 1;
+    int batchIndex = 1;             // 【新增】：当前批次编号
+    int batchStartFrame = 1;        // 【新增】：当前批次的起始帧号
 
     for (double current_time : timeToFilesMap.keys()) {
         while (m_isPaused && m_isRunning) QThread::msleep(100);
         if (!m_isRunning) break;
 
         FrameResult result;
-        result.frameIndex = frameIndex++;
+        result.frameIndex = frameIndex; // 注意这里去掉了 frameIndex++，移到了循环末尾
         result.timestamp = current_time;
         const QStringList& targetFiles = timeToFilesMap[current_time];
 
@@ -144,12 +151,43 @@ void DspWorker::run() {
             CBFResult cbf_res = cbf_engine.process(signal_w);
             Eigen::VectorXd p_cbf_spatial = cbf_res.P_cbf_spatial;
 
-            Eigen::MatrixXd S_uxuy, P_uxuy_norm, P_dcv_out, ux_bins, uy_bins;
-            deconv_processor(cbf_res.signal_fft_lofar, M, x_v, 0, f_lofar, theta_scan, M, d, c, fs, NFFT_WIN, m_config.dcvRlIter, S_uxuy, P_uxuy_norm, P_dcv_out, ux_bins, uy_bins);
-            // 在 DspWorker::run() 循环体内找到反卷积后的检测部分：
-            // ... [deconv_processor 运行后] ...
-            Eigen::VectorXd p_dcv_1d = P_dcv_out.rowwise().sum();
-            p_dcv_1d.reverseInPlace();
+            int f_num = f_lofar.size();
+            int theta_len = theta_scan.size();
+            Eigen::MatrixXd P_dcv_out = Eigen::MatrixXd::Zero(theta_len, f_num);
+            Eigen::MatrixXd P_dcv_out_energy = Eigen::MatrixXd::Zero(theta_len, f_num); // 能量增强池
+
+            Eigen::VectorXd cos_th(theta_len);
+            for(int i = 0; i < theta_len; ++i) {
+                cos_th(i) = std::cos(theta_scan(i) * M_PI / 180.0);
+            }
+
+            // 并行展开频点，极大提升效率（复刻 Matlab for k = 1:f_num）
+            for (int k = 0; k < f_num; ++k) {
+                Eigen::VectorXd P_f = cbf_res.P_out.col(k);
+                Eigen::VectorXd u_y = f_lofar(k) * cos_th;
+
+                Eigen::VectorXd PSF_f(theta_len);
+                for (int i = 0; i < theta_len; ++i) {
+                    double arg = M_PI * d * u_y(i) / c;
+                    if (std::abs(arg) < 1e-9) {
+                        PSF_f(i) = M * M;
+                    } else {
+                        double val = std::sin(M * arg) / std::sin(arg);
+                        PSF_f(i) = val * val;
+                    }
+                }
+                double max_psf = PSF_f.maxCoeff();
+                if (max_psf > 0) PSF_f /= max_psf;
+
+                // 核心：调用最新 1D 解卷积，并将界面设定的迭代次数生效
+                Eigen::VectorXd dcv_norm = RL_1D(P_f, PSF_f, m_config.dcvRlIter);
+
+                P_dcv_out.col(k) = dcv_norm;
+                P_dcv_out_energy.col(k) = dcv_norm * P_f.sum(); // 补偿真实能量
+            }
+
+            Eigen::VectorXd p_dcv_1d = P_dcv_out.rowwise().sum(); // 取代原有逻辑，直接获得空间谱
+
 
             Eigen::VectorXd Beamout_tmp = p_dcv_1d;
             std::vector<double> v_beam(Beamout_tmp.data(), Beamout_tmp.data() + Beamout_tmp.size());
@@ -165,7 +203,6 @@ void DspWorker::run() {
             for(size_t i=0; i<v_beam.size(); ++i) if(std::abs(v_beam[i] - mid) <= 3 * upmid) sq_sum_bg += (v_beam[i] - mean_bg) * (v_beam[i] - mean_bg);
             double std_bg = count_bg > 0 ? std::sqrt(sq_sum_bg / count_bg) : 0.0;
 
-            // 【核心修复 - 对齐 MATLAB 强力镇压虚假目标】
             // 1. 计算统计门限
             double threshold2_az_bg = mean_bg + 5 * std_bg;
             // 2. 计算旁瓣抑制门限 (0.02 约等于 -17dB)
@@ -177,14 +214,11 @@ void DspWorker::run() {
                 if(Beamout_tmp[i] < threshold2_az) Beamout_tmp[i] = 0.0;
             }
 
-            // 【核心修复 - 缩小盲区】：将 MinPeakDistance 从 30 缩小为 10，防止“同类相食”漏判
             std::vector<int> theta_index_current = findPeaks(Beamout_tmp, 10);
             std::vector<double> detected_angles;
             for(int idx : theta_index_current) detected_angles.push_back(cbf_engine.getThetaScan()(idx));
 
-            // 同样缩小 CBF 的寻峰间距
             std::vector<int> locs_cbf_all = findPeaks(p_cbf_spatial, 10);
-            // ... [后续逻辑保持一致] ...
             if (locs_cbf_all.empty()) {
                 int max_idx; p_cbf_spatial.maxCoeff(&max_idx);
                 locs_cbf_all.push_back(max_idx);
@@ -195,22 +229,21 @@ void DspWorker::run() {
             result.detectedAngles = QVector<double>(detected_angles.begin(), detected_angles.end());
 
             QList<TargetTrack> all_tracks = trackManager.updateTracks(detected_angles, theta_index_current, angles_cbf_all);
-            QList<TargetTrack> valid_confirmed_tracks; // 只有这里面的才能进入后续计算和 UI
+            QList<TargetTrack> valid_confirmed_tracks;
 
             QString frameLog = QString("\n---- [第%1帧 实时检测汇报] ----\n").arg(result.frameIndex);
             int valid_clusters = 0;
             QString clusterLog;
 
             for(auto& t : all_tracks) {
-                // 【绝杀过滤】：过滤掉所有未经确认的试探性目标虚警！不仅不显示，连 FFT 都不给算！
                 if (!t.isConfirmed) continue;
-
                 if (t.currentLoc < 0) continue;
 
                 if (t.isActive) {
-                    Eigen::VectorXd p_out_single = cbf_res.P_out.row(t.currentLoc);
-                    Eigen::VectorXd spectrum_db = (p_out_single.array() + 1e-12).log10() * 10.0;
-                    t.lofarSpectrum = QVector<double>(spectrum_db.data(), spectrum_db.data() + spectrum_db.size());
+//                    Eigen::VectorXd p_out_single = cbf_res.P_out.row(t.currentLoc);
+                    Eigen::VectorXd p_dcv_single = P_dcv_out_energy.row(t.currentLoc);
+                    Eigen::VectorXd spectrum_db = (p_dcv_single.array() + 1e-12).log10() * 10.0;
+                        t.lofarSpectrum = QVector<double>(spectrum_db.data(), spectrum_db.data() + spectrum_db.size());
 
                     Eigen::VectorXd background_db = medfilt1(spectrum_db, m_config.lofarBgMedWindow);
                     Eigen::VectorXd snr_db = spectrum_db - background_db;
@@ -237,7 +270,7 @@ void DspWorker::run() {
                     auto f_lofar_vec = cbf_engine.getFLofar();
                     for(int k = 0; k < f_lofar_vec.size(); ++k) {
                         int bin = std::round(f_lofar_vec(k) / df_calc);
-                        if(bin >= 0 && bin < half_fft) full_lofar_linear(bin) = p_out_single(k);
+                        if(bin >= 0 && bin < half_fft) full_lofar_linear(bin) = p_dcv_single(k);
                     }
                     t.lofarFullLinear = QVector<double>(full_lofar_linear.data(), full_lofar_linear.data() + full_lofar_linear.size());
 
@@ -315,12 +348,87 @@ void DspWorker::run() {
                 result.dcvData[i] = 10.0 * log10(p_dcv_1d(i) / (dmax + 1e-12) + 1e-12);
             }
 
-            // 【只向历史记录和 UI 发送经过确认的真目标】
             result.tracks = valid_confirmed_tracks;
             history_frames.push_back(result);
+            batch_frames.push_back(result); // 【新增】：同时存入本批次缓存
             emit frameProcessed(result);
 
         } catch (...) { continue; }
+
+        // =====================================================================
+        // 【新增】：批处理统计与信号发送逻辑 (例如每40帧触发一次)
+        // =====================================================================
+        if (batch_frames.size() == m_batchSize || frameIndex == timeToFilesMap.size()) {
+            std::vector<BatchTargetFeature> batchFeatures;
+            int currentEndFrame = frameIndex;
+
+            // 针对当前已确认的目标，统计这批次内的稳定特征
+            for (int tid = 1; tid <= trackManager.getConfirmedTargetCount(); ++tid) {
+                std::vector<double> freqs, shafts;
+                int active_frames = 0;
+                double last_angle = 0.0;
+
+                for (const auto& f : batch_frames) {
+                    for (const auto& t : f.tracks) {
+                        if (t.id == tid && t.isActive) {
+                            active_frames++;
+                            if (t.shaftFreq > 0) shafts.push_back(t.shaftFreq);
+                            for (double f_line : t.lineSpectra) freqs.push_back(f_line);
+                            last_angle = t.currentAngle; // 不断更新，留下最后一帧的角度 (CAL_JIAODU)
+                        }
+                    }
+                }
+
+                if (active_frames == 0) continue; // 本批次该目标未出现
+
+                BatchTargetFeature feature;
+                feature.formalId = tid;
+                feature.calAngle = last_angle;
+                feature.calDemon = shafts.empty() ? 0.0 : calculateMedian(shafts);
+
+                // 线谱聚类与过滤 (命中率门限防虚警)
+                std::sort(freqs.begin(), freqs.end());
+                if (!freqs.empty()) {
+                    std::vector<double> final_f;
+                    std::vector<int> final_c;
+                    std::vector<double> cur_cluster;
+                    cur_cluster.push_back(freqs[0]);
+
+                    for (size_t i = 1; i < freqs.size(); ++i) {
+                        if (freqs[i] - freqs[i-1] > 2.0) { // 2.0Hz 聚类容差
+                            final_f.push_back(calculateMedian(cur_cluster));
+                            final_c.push_back(cur_cluster.size());
+                            cur_cluster.clear();
+                        }
+                        cur_cluster.push_back(freqs[i]);
+                    }
+                    final_f.push_back(calculateMedian(cur_cluster));
+                    final_c.push_back(cur_cluster.size());
+
+                    int min_hit = std::max(2, (int)std::floor(0.20 * active_frames));
+                    if (active_frames <= 2) min_hit = 1;
+
+                    for (size_t i = 0; i < final_f.size(); ++i) {
+                        if (final_c[i] >= min_hit) {
+                            feature.calLofar.push_back(final_f[i]);
+                        }
+                    }
+                }
+
+                batchFeatures.push_back(feature);
+            }
+
+            // 发射批处理完成信号，让 SelfValidator 捕获并推演
+            emit batchFinished(batchIndex, batchStartFrame, currentEndFrame, batchFeatures);
+
+            // 清理缓存，准备下一批次
+            batch_frames.clear();
+            batchIndex++;
+            batchStartFrame = frameIndex + 1;
+        }
+        // =====================================================================
+
+        frameIndex++; // 【修改】：帧计数器累加移至此处
     }
 
     if (!m_isRunning) return;
@@ -329,13 +437,10 @@ void DspWorker::run() {
     QString report = "\n======================================================\n                 高级航迹管理评估报告                 \n======================================================\n";
     report += "【系统级总体评价】\n";
     report += QString("  ▶ 全流程总计耗时: %1 秒\n").arg(total_time_sec, 0, 'f', 2);
-    report += QString("  ▶ 总计稳定识别目标个数: %1 个\n\n").arg(trackManager.getConfirmedTargetCount()); // 使用确认数
+    report += QString("  ▶ 总计稳定识别目标个数: %1 个\n\n").arg(trackManager.getConfirmedTargetCount());
 
     report += "======================================================\n       目标最终特征提取池 (聚类线谱 + 统计轴频)       \n======================================================\n";
 
-    // =========================================================================
-    // 【问题二防虚警】：完美实现的硬命中率门限，彻底截杀 1/10 这种偶然事件
-    // =========================================================================
     for (int tid = 1; tid <= trackManager.getConfirmedTargetCount(); ++tid) {
         std::vector<double> freqs, shafts;
         int active_frames = 0;
@@ -356,7 +461,6 @@ void DspWorker::run() {
             std::vector<double> final_f; std::vector<int> final_c;
             std::vector<double> cur_cluster; cur_cluster.push_back(freqs[0]);
 
-            // 1. 初步距离聚类 (容差 2Hz)
             for (size_t i = 1; i < freqs.size(); ++i) {
                 if (freqs[i] - freqs[i-1] > 2.0) {
                     final_f.push_back(calculateMedian(cur_cluster));
@@ -367,11 +471,9 @@ void DspWorker::run() {
             }
             final_f.push_back(calculateMedian(cur_cluster)); final_c.push_back(cur_cluster.size());
 
-            // 2. 命中率门限硬过滤 (Hard Hit-rate Filtering)
             std::vector<double> valid_f;
             std::vector<int> valid_c;
 
-            // 设定防虚警红线：命中率必须大于总活跃帧的 20%，且绝不允许孤立的 1 次 (除非总共只跟了1、2帧)
             int min_hit = std::max(2, (int)std::floor(0.20 * active_frames));
             if (active_frames <= 2) min_hit = 1;
 
@@ -382,7 +484,6 @@ void DspWorker::run() {
                 }
             }
 
-            // 3. 构造最终安全的输出字符串
             if (valid_f.empty()) {
                 freqStr = "发散或命中率极低 (已被系统滤除)";
             } else {

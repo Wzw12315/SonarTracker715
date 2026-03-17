@@ -25,6 +25,9 @@ signals:
     void offlineResultsReady(const QList<OfflineTargetResult>& results);
     void processingFinished();
 
+    // 【新增】：每处理完一批数据 (默认40帧) 发射此信号，唤醒自校验模块
+        void batchFinished(int batchIndex, int startFrame, int endFrame, const std::vector<BatchTargetFeature>& features);
+
 protected:
     void run() override;
 
@@ -33,4 +36,7 @@ private:
     DspConfig m_config; // 【新增】：保存当前配置
     std::atomic<bool> m_isRunning;
     std::atomic<bool> m_isPaused;
+
+    // 【新增】：定义批处理大小
+        int m_batchSize = 55;
 };
