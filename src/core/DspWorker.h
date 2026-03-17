@@ -37,5 +37,5 @@ private:
     std::atomic<bool> m_isPaused;
 
     // 【修改】：对齐你的日志，设定每 10 帧触发一次批处理与界面重绘
-    int m_batchSize = 10;
+//    int m_batchSize = 10;
 };

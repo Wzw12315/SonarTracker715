@@ -14,13 +14,24 @@
 #include "qcustomplot.h"
 #include "../core/DspWorker.h"
 #include "../core/SelfValidator.h"
-
+#include <QDateTime> // 【新增】：用于三击时间判断
+#include <QPointer>  // 【新增】：用于安全指针
+// 【新增】：用于保存图表原始布局信息的结构体
+struct PlotLayoutInfo {
+    QWidget* originalParent = nullptr;
+    QLayout* originalLayout = nullptr;
+    int row = -1;
+    int col = -1;
+    int index = -1; // 备用，用于非网格布局
+};
 class MainWindow : public QMainWindow {
     Q_OBJECT
 public:
     explicit MainWindow(QWidget *parent = nullptr);
     ~MainWindow();
-
+protected:
+    // 【新增】：重写事件过滤器，用于捕获独立窗口的关闭/状态改变事件
+    bool eventFilter(QObject *obj, QEvent *event) override;
 private slots:
     void onSelectFilesClicked();
     void onLoadTruthClicked();
@@ -37,6 +48,7 @@ private slots:
     void onPlotContextMenu(const QPoint &pos);
     void onPlotMouseMove(QMouseEvent *event);
     void onPlotDoubleClick(QMouseEvent *event);
+
     // 【新增】：接收正确率的槽函数
         void onBatchAccuracyComputed(int batchIndex, double accuracy);
 private:
@@ -49,6 +61,10 @@ private:
     void updateTab2Plots();
     // 【新增】：缓存每个批次的正确率
         QList<QPair<int, double>> m_batchAccuracies;
+
+        // 【新增】：弹出和恢复图表的函数
+            void popOutPlot(QCustomPlot* plot);
+            void restorePlot(QWidget* popupWindow);
     QLineEdit* m_editFs;
     QLineEdit* m_editM;
     QLineEdit* m_editD;
@@ -80,7 +96,8 @@ private:
     QLineEdit* m_editDpBeta;
     QLineEdit* m_editDpGamma;
     QLineEdit* m_editDcvRlIter;
-
+    // 【新增】：批处理大小输入框
+        QLineEdit* m_editBatchSize;
     QPushButton* m_btnSelectFiles;
     QPushButton* m_btnLoadTruth;
     QPushButton* m_btnStart;
@@ -117,4 +134,8 @@ private:
     QList<FrameResult> m_historyResults;
     QString m_currentDir;
     DspConfig m_currentConfig;
+
+
+        // 【新增】：存储图表原始布局信息，键为弹出的独立窗口指针
+        QMap<QWidget*, QPair<QCustomPlot*, PlotLayoutInfo>> m_popupPlots;
 };

@@ -41,6 +41,8 @@ struct DspConfig {
     double dpAlpha = 1.5;
     double dpBeta = 1.0;
     double dpGamma = 0.1;
+    // 【新增】：将批处理大小也加入全局配置，默认10
+        int batchSize = 10;
 };
 Q_DECLARE_METATYPE(DspConfig)
 
@@ -90,6 +92,7 @@ struct TargetTrack {
 
     std::vector<double> lineSpectra;
     double shaftFreq;
+
 };
 Q_DECLARE_METATYPE(TargetTrack)
 

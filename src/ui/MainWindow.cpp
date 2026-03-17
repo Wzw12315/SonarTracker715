@@ -57,6 +57,7 @@ void MainWindow::setupPlotInteraction(QCustomPlot* plot) {
     plot->setProperty("showTooltip", true);
     connect(plot, &QCustomPlot::mouseMove, this, &MainWindow::onPlotMouseMove);
     connect(plot, &QCustomPlot::mouseDoubleClick, this, &MainWindow::onPlotDoubleClick);
+
 }
 
 void MainWindow::updatePlotOriginalRange(QCustomPlot* plot) {
@@ -67,7 +68,114 @@ void MainWindow::updatePlotOriginalRange(QCustomPlot* plot) {
     plot->setProperty("origYMin", plot->yAxis->range().lower);
     plot->setProperty("origYMax", plot->yAxis->range().upper);
 }
+// =========================================================================
+// 【新增】：图表弹出与恢复机制
+// =========================================================================
 
+
+
+void MainWindow::popOutPlot(QCustomPlot* plot) {
+    // 防止重复弹出
+    if (plot->parentWidget() && plot->parentWidget()->property("isPopup").toBool()) {
+        return;
+    }
+
+    PlotLayoutInfo info;
+    info.originalParent = plot->parentWidget();
+
+    // 记录图表在原有布局中的位置信息
+    if (info.originalParent && info.originalParent->layout()) {
+        info.originalLayout = info.originalParent->layout();
+
+        // 尝试判断是不是 QGridLayout
+        QGridLayout* gridLayout = qobject_cast<QGridLayout*>(info.originalLayout);
+        if (gridLayout) {
+            int rowSpan, colSpan;
+            int idx = gridLayout->indexOf(plot);
+            if (idx != -1) {
+                gridLayout->getItemPosition(idx, &info.row, &info.col, &rowSpan, &colSpan);
+            }
+        } else {
+            // 如果是普通的 QVBoxLayout/QHBoxLayout，记下 index
+            info.index = info.originalLayout->indexOf(plot);
+        }
+
+        // 从原布局中移除图表 (不会 delete plot)
+        info.originalLayout->removeWidget(plot);
+    }
+    plot->setParent(nullptr);
+
+    // 创建一个独立窗口承载该图表
+    QWidget* popupWindow = new QWidget();
+    popupWindow->setProperty("isPopup", true);
+    popupWindow->setWindowTitle("图表独立查看 (关闭或最小化即可还原)");
+    popupWindow->setMinimumSize(800, 600);
+
+    QVBoxLayout* popupLayout = new QVBoxLayout(popupWindow);
+    popupLayout->setContentsMargins(0, 0, 0, 0);
+    popupLayout->addWidget(plot);
+
+    // 保存信息
+    m_popupPlots.insert(popupWindow, qMakePair(plot, info));
+
+    // 给独立窗口安装事件过滤器，以便捕获关闭和最小化事件
+    popupWindow->installEventFilter(this);
+
+    // 获取当前屏幕并居中显示
+    popupWindow->setAttribute(Qt::WA_DeleteOnClose);
+    popupWindow->show();
+    appendLog(">> 已将图表弹出为独立窗口。\n");
+}
+
+void MainWindow::restorePlot(QWidget* popupWindow) {
+    if (!m_popupPlots.contains(popupWindow)) return;
+
+    QPair<QCustomPlot*, PlotLayoutInfo> data = m_popupPlots.take(popupWindow);
+    QCustomPlot* plot = data.first;
+    PlotLayoutInfo info = data.second;
+
+    if (plot && info.originalParent && info.originalLayout) {
+        // 把图表放回原布局
+        plot->setParent(info.originalParent);
+
+        QGridLayout* gridLayout = qobject_cast<QGridLayout*>(info.originalLayout);
+        if (gridLayout && info.row != -1 && info.col != -1) {
+            gridLayout->addWidget(plot, info.row, info.col);
+        } else if (QBoxLayout* boxLayout = qobject_cast<QBoxLayout*>(info.originalLayout)) {
+            if (info.index != -1) {
+                boxLayout->insertWidget(info.index, plot);
+            } else {
+                boxLayout->addWidget(plot);
+            }
+        } else {
+            info.originalLayout->addWidget(plot);
+        }
+        plot->show();
+    }
+    appendLog(">> 图表已恢复至主界面原始位置。\n");
+}
+
+bool MainWindow::eventFilter(QObject *obj, QEvent *event) {
+    // 检查是否是我们创建的弹窗
+    QWidget* widget = qobject_cast<QWidget*>(obj);
+    if (widget && widget->property("isPopup").toBool()) {
+
+        // 当窗口被关闭时
+        if (event->type() == QEvent::Close) {
+            restorePlot(widget);
+            // 这里不 return true，让 Qt 继续完成窗口销毁工作
+        }
+        // 当窗口状态改变（如最小化）时
+        else if (event->type() == QEvent::WindowStateChange) {
+            if (widget->isMinimized()) {
+                restorePlot(widget);
+                // 因为要销毁窗口，所以触发 close
+                widget->close();
+            }
+        }
+    }
+    return QMainWindow::eventFilter(obj, event);
+}
 void MainWindow::onPlotContextMenu(const QPoint &pos) {
     QCustomPlot* plot = qobject_cast<QCustomPlot*>(sender());
     if (!plot) return;
@@ -78,6 +186,11 @@ void MainWindow::onPlotContextMenu(const QPoint &pos) {
     QAction* actReset = menu.addAction("🔄 还原原始视角 (双击)");
     QAction* actZoomIn = menu.addAction("🔍 放大区域");
     QAction* actZoomOut = menu.addAction("🔎 缩小区域");
+    menu.addSeparator();
+
+    // 【新增】：将弹出窗口功能加入右键菜单
+    QAction* actPopOut = menu.addAction("🪟 弹出为独立窗口");
+
     menu.addSeparator();
     QAction* actToggleTip = menu.addAction(plot->property("showTooltip").toBool() ? "💡 隐藏光标数值" : "💡 开启光标数值");
     menu.addSeparator();
@@ -94,6 +207,9 @@ void MainWindow::onPlotContextMenu(const QPoint &pos) {
         plot->xAxis->scaleRange(1.25);
         plot->yAxis->scaleRange(1.25);
         plot->replot();
+    } else if (selected == actPopOut) {
+        // 【新增】：点击菜单项时触发弹出
+        popOutPlot(plot);
     } else if (selected == actToggleTip) {
         plot->setProperty("showTooltip", !plot->property("showTooltip").toBool());
         if (!plot->property("showTooltip").toBool()) QToolTip::hideText();
@@ -105,7 +221,6 @@ void MainWindow::onPlotContextMenu(const QPoint &pos) {
         }
     }
 }
-
 void MainWindow::onPlotMouseMove(QMouseEvent *event) {
     QCustomPlot* plot = qobject_cast<QCustomPlot*>(sender());
     if (!plot || !plot->property("showTooltip").toBool()) return;
@@ -195,6 +310,8 @@ void MainWindow::setupUi() {
     fArray->addRow("环境声速 (m/s):", m_editC = new QLineEdit("1500.0"));
     fArray->addRow("聚焦半径 (m):", m_editRScan = new QLineEdit("20000.0"));
     fArray->addRow("时间步进 (s):", m_editTimeStep = new QLineEdit("3.0"));
+    // 【新增】：在UI上添加批处理帧数的输入框，默认值为 10
+        fArray->addRow("批处理帧数 (帧):", m_editBatchSize = new QLineEdit("10"));
     paramLayout->addWidget(gArray);
 
     QGroupBox* gFreq = new QGroupBox("目标特征频段划分", paramContainer);
@@ -407,7 +524,8 @@ void MainWindow::onStartClicked() {
     m_currentConfig.c = m_editC->text().toDouble();
     m_currentConfig.r_scan = m_editRScan->text().toDouble();
     m_currentConfig.timeStep = m_editTimeStep->text().toDouble();
-
+    // 【新增】：读取界面上设置的批处理帧数
+        m_currentConfig.batchSize = m_editBatchSize->text().toInt();
     m_currentConfig.lofarMin = m_editLofarMin->text().toDouble();
     m_currentConfig.lofarMax = m_editLofarMax->text().toDouble();
     m_currentConfig.demonMin = m_editDemonMin->text().toDouble();
@@ -568,7 +686,7 @@ void MainWindow::onFrameProcessed(const FrameResult& result) {
     m_spatialPlot->graph(1)->setData(result.thetaAxis, result.dcvData);
     m_plotTitle->setText(QString("宽带空间谱实时折线图 (第%1帧 | 时间: %2s)").arg(result.frameIndex).arg(result.timestamp));
     m_spatialPlot->replot();
-    updatePlotOriginalRange(m_spatialPlot);
+    (m_spatialPlot);
 
     for (double ang : result.detectedAngles) m_timeAzimuthPlot->graph(0)->addData(ang, result.timestamp);
     m_timeAzimuthPlot->yAxis->setRange(std::max(0.0, result.timestamp - 30.0), result.timestamp + 5.0);

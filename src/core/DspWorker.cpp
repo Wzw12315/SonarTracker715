@@ -376,7 +376,7 @@ void DspWorker::run() {
         // =====================================================================
         // 批处理统计、特征计算与【实时滚动绘图】
         // =====================================================================
-        if (batch_frames.size() == m_batchSize || frameIndex == timeToFilesMap.size()) {
+        if (batch_frames.size() == m_config.batchSize || frameIndex == timeToFilesMap.size()) {
             std::vector<BatchTargetFeature> batchFeatures;
             int currentEndFrame = frameIndex;
 
@@ -591,7 +591,7 @@ void DspWorker::run() {
             }
 
             double median_shaft = shafts.empty() ? 0.0 : calculateMedian(shafts);
-            report += QString("  ▶ 目标 %1 [高频线谱] : %2 \n").arg(tid).arg(freqStr);
+            report += QString("  ▶ 目标 %1             [线谱] : %2 \n").arg(tid).arg(freqStr);
 
             // 【新增】：输出包含计算公式的百分比线谱正确率
             if (num_valid_lines > 0 && active_frames > 0) {
