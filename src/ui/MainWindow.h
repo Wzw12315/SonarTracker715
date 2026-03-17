@@ -34,7 +34,6 @@ private slots:
     void onOfflineResultsReady(const QList<OfflineTargetResult>& results);
     void onProcessingFinished();
 
-    // 图表交互事件槽函数
     void onPlotContextMenu(const QPoint &pos);
     void onPlotMouseMove(QMouseEvent *event);
     void onPlotDoubleClick(QMouseEvent *event);
@@ -42,19 +41,18 @@ private slots:
 private:
     void setupUi();
     void createTargetPlots(int targetId);
-
-    // 为图表注入交互灵魂的工具函数
     void setupPlotInteraction(QCustomPlot* plot);
     void updatePlotOriginalRange(QCustomPlot* plot);
 
-    // 参数输入框指针
+    // 【修改】：将更新函数重命名，使其包含所有的 Tab2 绘图
+    void updateTab2Plots();
+
     QLineEdit* m_editFs;
     QLineEdit* m_editM;
     QLineEdit* m_editD;
     QLineEdit* m_editC;
     QLineEdit* m_editRScan;
     QLineEdit* m_editTimeStep;
-
     QLineEdit* m_editLofarMin;
     QLineEdit* m_editLofarMax;
     QLineEdit* m_editDemonMin;
@@ -62,7 +60,6 @@ private:
     QLineEdit* m_editNfftR;
     QLineEdit* m_editNfftWin;
 
-    // 【新增】：空间谱方位检测参数输入框
     QLineEdit* m_editAzDetBgMult;
     QLineEdit* m_editAzDetSidelobeRatio;
     QLineEdit* m_editAzDetPeakMinDist;
@@ -73,7 +70,6 @@ private:
 
     QLineEdit* m_editFirOrder;
     QLineEdit* m_editFirCutoff;
-
     QLineEdit* m_editTpswG;
     QLineEdit* m_editTpswE;
     QLineEdit* m_editTpswC;
@@ -81,8 +77,6 @@ private:
     QLineEdit* m_editDpAlpha;
     QLineEdit* m_editDpBeta;
     QLineEdit* m_editDpGamma;
-
-    // DCV 迭代次数参数输入框
     QLineEdit* m_editDcvRlIter;
 
     QPushButton* m_btnSelectFiles;
@@ -102,8 +96,11 @@ private:
     QWidget* m_targetPanelWidget;
     QGridLayout* m_targetLayout;
 
-    QVBoxLayout* m_tab2Layout;
+    // 【修改】：Tab2 的布局与图表指针
+    QCustomPlot* m_cbfWaterfallPlot;
     QCustomPlot* m_dcvWaterfallPlot;
+    QWidget* m_sliceWidget;
+    QGridLayout* m_sliceLayout;
 
     QWidget* m_lofarWaterfallWidget;
     QGridLayout* m_lofarWaterfallLayout;

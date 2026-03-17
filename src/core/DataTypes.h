@@ -23,9 +23,9 @@ struct DspConfig {
     int nfftWin = 30000;
 
     // 【新增】：空间方位寻峰检测参数
-        double azDetBgMult = 5.0;         // 背景噪声容限乘子 (默认 5.0 倍 std)
-        double azDetSidelobeRatio = 0.02; // 旁瓣抑制比 (默认 0.02)
-        int azDetPeakMinDist = 2;        // 寻峰最小点数间距 (默认 2)
+    double azDetBgMult = 5.0;         // 背景噪声容限乘子 (默认 5.0 倍 std)
+    double azDetSidelobeRatio = 0.02; // 旁瓣抑制比 (默认 0.02)
+    int azDetPeakMinDist = 2;        // 寻峰最小点数间距 (默认 2)
 
     int lofarBgMedWindow = 150;
     double lofarSnrThreshMult = 2.5;
@@ -43,7 +43,6 @@ struct DspConfig {
     double dpGamma = 0.1;
 };
 Q_DECLARE_METATYPE(DspConfig)
-
 
 // 目标的先验真值参数（对应 数据来源.docx 中的设定）
 struct TargetTruth {
@@ -67,7 +66,6 @@ struct BatchTargetFeature {
     // 协方差矩阵 R_matrix 可以挂载在这里或通过其他引用传递给 MFP 深度计算
 };
 
-
 // 定义单个目标的实时航迹状态
 struct TargetTrack {
     int id;               // 正式对外暴露的目标 ID (仅转正后分配)
@@ -86,7 +84,10 @@ struct TargetTrack {
     QVector<double> lofarSpectrum;
     QVector<double> demonSpectrum;
     QVector<double> lineSpectrumAmp;
+
     QVector<double> lofarFullLinear;
+    QVector<double> cbfLofarFullLinear; // 【新增】：保留当前位置的 CBF 原始谱用于对比
+
     std::vector<double> lineSpectra;
     double shaftFreq;
 };

@@ -126,6 +126,7 @@ void DspWorker::run() {
     QMap<int, QVector<double>> lastDemon;
     QMap<int, QVector<double>> lastLineAmp;
     QMap<int, QVector<double>> lastLofarFull;
+    QMap<int, QVector<double>> lastCbfLofarFull; // 【新增】：缓存 CBF 完整切片
 
     int frameIndex = 1;
     int batchIndex = 1;
@@ -192,14 +193,12 @@ void DspWorker::run() {
             for(size_t i=0; i<v_beam.size(); ++i) v_diff[i] = std::abs(v_beam[i] - mid);
             double upmid = calculateMedian(v_diff);
 
-            // 计算背景噪声统计量
             double sum_bg = 0, sq_sum_bg = 0; int count_bg = 0;
             for(size_t i=0; i<v_beam.size(); ++i) if(std::abs(v_beam[i] - mid) <= 3 * upmid) { sum_bg += v_beam[i]; count_bg++; }
             double mean_bg = count_bg > 0 ? sum_bg / count_bg : 0.0;
             for(size_t i=0; i<v_beam.size(); ++i) if(std::abs(v_beam[i] - mid) <= 3 * upmid) sq_sum_bg += (v_beam[i] - mean_bg) * (v_beam[i] - mean_bg);
             double std_bg = count_bg > 0 ? std::sqrt(sq_sum_bg / count_bg) : 0.0;
 
-            // 【核心修改】：通过 m_config 导入动态门限与距离参数
             double threshold2_az_bg = mean_bg + m_config.azDetBgMult * std_bg;
             double threshold2_az_sidelobe = m_config.azDetSidelobeRatio * Beamout_tmp.maxCoeff();
             double threshold2_az = std::max(threshold2_az_bg, threshold2_az_sidelobe);
@@ -208,7 +207,6 @@ void DspWorker::run() {
                 if(Beamout_tmp[i] < threshold2_az) Beamout_tmp[i] = 0.0;
             }
 
-            // 【核心修改】：替换硬编码的最小点数 10 为 m_config.azDetPeakMinDist
             std::vector<int> theta_index_current = findPeaks(Beamout_tmp, m_config.azDetPeakMinDist);
             std::vector<double> detected_angles;
             for(int idx : theta_index_current) detected_angles.push_back(cbf_engine.getThetaScan()(idx));
@@ -235,58 +233,62 @@ void DspWorker::run() {
                 if (t.currentLoc < 0) continue;
 
                 if (t.isActive) {
-                                    Eigen::VectorXd p_dcv_single = P_dcv_out_energy.row(t.currentLoc);
-                                    Eigen::VectorXd spectrum_db = (p_dcv_single.array() + 1e-12).log10() * 10.0;
+                    Eigen::VectorXd p_dcv_single = P_dcv_out_energy.row(t.currentLoc);
+                    Eigen::VectorXd spectrum_db = (p_dcv_single.array() + 1e-12).log10() * 10.0;
 
-                                    // 【关键修复 1】：对齐 MATLAB，增加 -80dB 的底噪截断！
-                                    // 否则 DCV -120dB 的极深零陷会导致方差(std)爆炸，从而把寻峰门限抬升到天上，误杀所有线谱！
-                                    spectrum_db = (spectrum_db.array() < -80.0).select(-80.0, spectrum_db);
+                    spectrum_db = (spectrum_db.array() < -80.0).select(-80.0, spectrum_db);
 
-                                    t.lofarSpectrum = QVector<double>(spectrum_db.data(), spectrum_db.data() + spectrum_db.size());
+                    t.lofarSpectrum = QVector<double>(spectrum_db.data(), spectrum_db.data() + spectrum_db.size());
 
-                                    Eigen::VectorXd background_db = medfilt1(spectrum_db, m_config.lofarBgMedWindow);
-                                    Eigen::VectorXd snr_db = spectrum_db - background_db;
+                    Eigen::VectorXd background_db = medfilt1(spectrum_db, m_config.lofarBgMedWindow);
+                    Eigen::VectorXd snr_db = spectrum_db - background_db;
 
-                                    // 边缘切除，对齐 MATLAB: edge_cut = 30
-                                    int edge_cut = 30;
-                                    for (int i = 0; i < edge_cut && i < snr_db.size(); ++i) snr_db(i) = 0.0;
-                                    for (int i = std::max(0, (int)snr_db.size() - edge_cut); i < snr_db.size(); ++i) snr_db(i) = 0.0;
+                    int edge_cut = 30;
+                    for (int i = 0; i < edge_cut && i < snr_db.size(); ++i) snr_db(i) = 0.0;
+                    for (int i = std::max(0, (int)snr_db.size() - edge_cut); i < snr_db.size(); ++i) snr_db(i) = 0.0;
 
-                                    double mean_snr = snr_db.mean();
-                                    // 【关键修复 2】：对方差的计算使用 N-1 进行归一化，严格对齐 MATLAB 的 std() 函数
-                                    double std_snr = std::sqrt((snr_db.array() - mean_snr).square().sum() / (snr_db.size() - 1.0));
+                    double mean_snr = snr_db.mean();
+                    double std_snr = std::sqrt((snr_db.array() - mean_snr).square().sum() / (snr_db.size() - 1.0));
 
-                                    double threshold_ls = mean_snr + m_config.lofarSnrThreshMult * std_snr;
-                                    for(int i=0; i<snr_db.size(); ++i) {
-                                        if(snr_db(i) < threshold_ls || snr_db(i) < 0) snr_db(i) = 0.0;
-                                    }
+                    double threshold_ls = mean_snr + m_config.lofarSnrThreshMult * std_snr;
+                    for(int i=0; i<snr_db.size(); ++i) {
+                        if(snr_db(i) < threshold_ls || snr_db(i) < 0) snr_db(i) = 0.0;
+                    }
 
-                                    // 寻找波峰
-                                    std::vector<int> temp_locs = findPeaks(snr_db, m_config.lofarPeakMinDist);
-                                    std::vector<int> locs_ls;
+                    std::vector<int> temp_locs = findPeaks(snr_db, m_config.lofarPeakMinDist);
+                    std::vector<int> locs_ls;
 
-                                    // 【关键修复 3】：对齐 MATLAB 的 'MinPeakProminence', 2.0
-                                    for(int idx : temp_locs) {
-                                        if (snr_db(idx) >= 2.0) {
-                                            locs_ls.push_back(idx);
-                                        }
-                                    }
+                    for(int idx : temp_locs) {
+                        if (snr_db(idx) >= 2.0) {
+                            locs_ls.push_back(idx);
+                        }
+                    }
 
-                                    t.lineSpectrumAmp = QVector<double>(spectrum_db.size(), -150.0);
-                                    for(int idx : locs_ls) {
-                                        t.lineSpectra.push_back(cbf_engine.getFLofar()(idx));
-                                        t.lineSpectrumAmp[idx] = spectrum_db(idx);
-                                    }
+                    t.lineSpectrumAmp = QVector<double>(spectrum_db.size(), -150.0);
+                    for(int idx : locs_ls) {
+                        t.lineSpectra.push_back(cbf_engine.getFLofar()(idx));
+                        t.lineSpectrumAmp[idx] = spectrum_db(idx);
+                    }
 
-                                    // ---- 以下代码保持不变 ----
-                                    Eigen::VectorXd full_lofar_linear = Eigen::VectorXd::Constant(half_fft, 1e-12);
-                                    double df_calc = fs / (double)NFFT_WIN;
-                                    auto f_lofar_vec = cbf_engine.getFLofar();
-                                    for(int k = 0; k < f_lofar_vec.size(); ++k) {
-                                        int bin = std::round(f_lofar_vec(k) / df_calc);
-                                        if(bin >= 0 && bin < half_fft) full_lofar_linear(bin) = p_dcv_single(k);
-                                    }
-                                    t.lofarFullLinear = QVector<double>(full_lofar_linear.data(), full_lofar_linear.data() + full_lofar_linear.size());
+                    // --- 提取 DCV 完整切片 ---
+                    Eigen::VectorXd full_lofar_linear = Eigen::VectorXd::Constant(half_fft, 1e-12);
+                    double df_calc = fs / (double)NFFT_WIN;
+                    auto f_lofar_vec = cbf_engine.getFLofar();
+                    for(int k = 0; k < f_lofar_vec.size(); ++k) {
+                        int bin = std::round(f_lofar_vec(k) / df_calc);
+                        if(bin >= 0 && bin < half_fft) full_lofar_linear(bin) = p_dcv_single(k);
+                    }
+                    t.lofarFullLinear = QVector<double>(full_lofar_linear.data(), full_lofar_linear.data() + full_lofar_linear.size());
+
+                    // --- 【新增】：提取 CBF 完整切片 ---
+                    Eigen::VectorXd p_cbf_single = cbf_res.P_out.row(t.currentLoc);
+                    Eigen::VectorXd full_cbf_linear = Eigen::VectorXd::Constant(half_fft, 1e-12);
+                    for(int k = 0; k < f_lofar_vec.size(); ++k) {
+                        int bin = std::round(f_lofar_vec(k) / df_calc);
+                        if(bin >= 0 && bin < half_fft) full_cbf_linear(bin) = p_cbf_single(k);
+                    }
+                    t.cbfLofarFullLinear = QVector<double>(full_cbf_linear.data(), full_cbf_linear.data() + full_cbf_linear.size());
+
 
                     std::complex<double> J(0, 1);
                     Eigen::MatrixXd Phase_demon = 2.0 * M_PI * tau_mat.row(t.currentLoc).transpose() * f_demon;
@@ -328,6 +330,7 @@ void DspWorker::run() {
                     lastDemon[t.id] = t.demonSpectrum;
                     lastLineAmp[t.id] = t.lineSpectrumAmp;
                     lastLofarFull[t.id] = t.lofarFullLinear;
+                    lastCbfLofarFull[t.id] = t.cbfLofarFullLinear; // 【新增】
 
                     frameLog += QString("  ▶ 目标%1 (DCV:%2°, CBF:%3°) 实时轴频检测: %4 Hz\n")
                                 .arg(t.id).arg(t.currentAngle, 0, 'f', 1).arg(t.currentAngleCbf, 0, 'f', 1).arg(t.shaftFreq, 0, 'f', 1);
@@ -344,6 +347,7 @@ void DspWorker::run() {
                     t.demonSpectrum = lastDemon.value(t.id);
                     t.lineSpectrumAmp = lastLineAmp.value(t.id);
                     t.lofarFullLinear = lastLofarFull.value(t.id);
+                    t.cbfLofarFullLinear = lastCbfLofarFull.value(t.id); // 【新增】
                 }
                 valid_confirmed_tracks.append(t);
             }
@@ -369,10 +373,14 @@ void DspWorker::run() {
 
         } catch (...) { continue; }
 
+        // =====================================================================
+        // 批处理统计、特征计算与【实时滚动绘图】
+        // =====================================================================
         if (batch_frames.size() == m_batchSize || frameIndex == timeToFilesMap.size()) {
             std::vector<BatchTargetFeature> batchFeatures;
             int currentEndFrame = frameIndex;
 
+            // 1. 统计当前批次特征给综合报告
             for (int tid = 1; tid <= trackManager.getConfirmedTargetCount(); ++tid) {
                 std::vector<double> freqs, shafts;
                 int active_frames = 0;
@@ -428,6 +436,80 @@ void DspWorker::run() {
             }
 
             emit batchFinished(batchIndex, batchStartFrame, currentEndFrame, batchFeatures);
+
+            // =================================================================
+            // 2. 随批次生成全量历史瀑布图与 DP 特征图
+            // =================================================================
+            QList<OfflineTargetResult> offResults;
+            for (int tid = 1; tid <= trackManager.getConfirmedTargetCount(); ++tid) {
+                std::vector<QVector<double>> tHistory;
+                double startAng = -1.0;
+                double minFoundFreq = 9999.0;
+                double maxFoundFreq = -9999.0;
+
+                for (const auto& f : history_frames) {
+                    for (const auto& tr : f.tracks) {
+                        if (tr.id == tid) {
+                            tHistory.push_back(tr.lofarFullLinear);
+                            if (startAng < 0 && tr.isActive) startAng = tr.currentAngle;
+                            if (tr.isActive && !tr.lineSpectra.empty()) {
+                                for(double f_line : tr.lineSpectra) {
+                                    if(f_line < minFoundFreq) minFoundFreq = f_line;
+                                    if(f_line > maxFoundFreq) maxFoundFreq = f_line;
+                                }
+                            }
+                            break;
+                        }
+                    }
+                }
+                if (tHistory.empty() || tHistory[0].isEmpty()) continue;
+
+                int M_time = tHistory.size();
+                Eigen::MatrixXd lofar_mat = Eigen::MatrixXd::Zero(M_time, half_fft);
+                for (int r = 0; r < M_time; ++r) {
+                    for (int c = 0; c < half_fft; ++c) lofar_mat(r, c) = tHistory[r][c];
+                }
+
+                Eigen::RowVectorXd center_freq, f_stft, t_stft;
+                Eigen::MatrixXd Z_TPSW;
+                Eigen::MatrixXi counter;
+
+                detect_line_spectrum_from_lofar_change(lofar_mat, fs, NFFT_R, center_freq, Z_TPSW, counter, f_stft, t_stft,
+                                                       m_config.tpswG, m_config.tpswE, m_config.tpswC, m_config.dpL, m_config.dpAlpha, m_config.dpBeta, m_config.dpGamma);
+
+                OfflineTargetResult offRes;
+                offRes.targetId = tid;
+                offRes.startAngle = startAng;
+                offRes.timeFrames = M_time;
+                offRes.freqBins = half_fft;
+                offRes.minTime = history_frames.front().timestamp;
+                offRes.maxTime = history_frames.back().timestamp;
+                if (std::abs(offRes.maxTime - offRes.minTime) < 0.1) offRes.maxTime += 3.0;
+
+                if (minFoundFreq > maxFoundFreq) {
+                    offRes.displayFreqMin = m_config.lofarMin;
+                    offRes.displayFreqMax = m_config.lofarMax;
+                } else {
+                    offRes.displayFreqMin = std::max(0.0, minFoundFreq - 15.0);
+                    offRes.displayFreqMax = std::min(fs / 2.0, maxFoundFreq + 15.0);
+                }
+
+                offRes.rawLofarDb.resize(M_time * half_fft);
+                offRes.tpswLofarDb.resize(M_time * half_fft);
+                offRes.dpCounter.resize(M_time * half_fft);
+
+                for (int r = 0; r < M_time; ++r) {
+                    for (int c = 0; c < half_fft; ++c) {
+                        int idx = r * half_fft + c;
+                        offRes.rawLofarDb[idx] = 10.0 * log10(lofar_mat(r, c) + 1e-12);
+                        offRes.tpswLofarDb[idx] = 10.0 * log10(Z_TPSW(r, c) + 1e-12);
+                        offRes.dpCounter[idx] = (counter(c, r) > 0) ? 10.0 : 0.0;
+                    }
+                }
+                offResults.append(offRes);
+            }
+
+            emit offlineResultsReady(offResults);
 
             batch_frames.clear();
             batchIndex++;
@@ -533,77 +615,6 @@ void DspWorker::run() {
     report += "=================================================================================\n";
 
     emit reportReady(report);
-
-    QList<OfflineTargetResult> offResults;
-    for (int tid = 1; tid <= trackManager.getConfirmedTargetCount(); ++tid) {
-        std::vector<QVector<double>> tHistory;
-        double startAng = -1.0;
-        double minFoundFreq = 9999.0;
-        double maxFoundFreq = -9999.0;
-
-        for (const auto& f : history_frames) {
-            for (const auto& tr : f.tracks) {
-                if (tr.id == tid) {
-                    tHistory.push_back(tr.lofarFullLinear);
-                    if (startAng < 0 && tr.isActive) startAng = tr.currentAngle;
-                    if (tr.isActive && !tr.lineSpectra.empty()) {
-                        for(double f_line : tr.lineSpectra) {
-                            if(f_line < minFoundFreq) minFoundFreq = f_line;
-                            if(f_line > maxFoundFreq) maxFoundFreq = f_line;
-                        }
-                    }
-                    break;
-                }
-            }
-        }
-        if (tHistory.empty() || tHistory[0].isEmpty()) continue;
-
-        int M_time = tHistory.size();
-        Eigen::MatrixXd lofar_mat = Eigen::MatrixXd::Zero(M_time, half_fft);
-        for (int r = 0; r < M_time; ++r) {
-            for (int c = 0; c < half_fft; ++c) lofar_mat(r, c) = tHistory[r][c];
-        }
-
-        Eigen::RowVectorXd center_freq, f_stft, t_stft;
-        Eigen::MatrixXd Z_TPSW;
-        Eigen::MatrixXi counter;
-
-        detect_line_spectrum_from_lofar_change(lofar_mat, fs, NFFT_R, center_freq, Z_TPSW, counter, f_stft, t_stft,
-                                               m_config.tpswG, m_config.tpswE, m_config.tpswC, m_config.dpL, m_config.dpAlpha, m_config.dpBeta, m_config.dpGamma);
-
-        OfflineTargetResult offRes;
-        offRes.targetId = tid;
-        offRes.startAngle = startAng;
-        offRes.timeFrames = M_time;
-        offRes.freqBins = half_fft;
-        offRes.minTime = history_frames.front().timestamp;
-        offRes.maxTime = history_frames.back().timestamp;
-        if (std::abs(offRes.maxTime - offRes.minTime) < 0.1) offRes.maxTime += 3.0;
-
-        if (minFoundFreq > maxFoundFreq) {
-            offRes.displayFreqMin = m_config.lofarMin;
-            offRes.displayFreqMax = m_config.lofarMax;
-        } else {
-            offRes.displayFreqMin = std::max(0.0, minFoundFreq - 15.0);
-            offRes.displayFreqMax = std::min(fs / 2.0, maxFoundFreq + 15.0);
-        }
-
-        offRes.rawLofarDb.resize(M_time * half_fft);
-        offRes.tpswLofarDb.resize(M_time * half_fft);
-        offRes.dpCounter.resize(M_time * half_fft);
-
-        for (int r = 0; r < M_time; ++r) {
-            for (int c = 0; c < half_fft; ++c) {
-                int idx = r * half_fft + c;
-                offRes.rawLofarDb[idx] = 10.0 * log10(lofar_mat(r, c) + 1e-12);
-                offRes.tpswLofarDb[idx] = 10.0 * log10(Z_TPSW(r, c) + 1e-12);
-                offRes.dpCounter[idx] = (counter(c, r) >= 4) ? counter(c, r) : 0.0;
-            }
-        }
-        offResults.append(offRes);
-    }
-
-    emit offlineResultsReady(offResults);
 
     fftw_destroy_plan(plan_ifft); fftw_free(demon_ifft_in); fftw_free(demon_ifft_out);
     fftw_destroy_plan(plan_fft);  fftw_free(demon_fft_in);  fftw_free(demon_fft_out);

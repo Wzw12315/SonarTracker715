@@ -7,7 +7,6 @@
 using namespace Eigen;
 using namespace std;
 
-// 安全的百分位数计算
 double prctile(const MatrixXd& data, double p)
 {
     if (data.size() == 0) return 0.0;
@@ -30,7 +29,6 @@ double prctile(const MatrixXd& data, double p)
     return vec(idx_floor) + frac * (vec(idx_ceil) - vec(idx_floor));
 }
 
-// 完美修复边界和索引的 TPSW
 MatrixXd tpsw_normalization(const MatrixXd& X, double G, double E, double C)
 {
     int N = X.rows();
@@ -45,7 +43,6 @@ MatrixXd tpsw_normalization(const MatrixXd& X, double G, double E, double C)
     for (int idx_time = 0; idx_time < N; ++idx_time) {
         RowVectorXd x = X.row(idx_time);
         for (int k = 0; k < M; ++k) {
-            // 全部使用 0 基准索引
             int left_start = max(0, k - g_int);
             int left_end   = max(0, k - e_int);
             int right_start = min(M - 1, k + e_int);
@@ -183,7 +180,7 @@ void calc_spectrum_feature(
         max_phi_window_all(win_idx_cpp) = max_phi_window;
 
         RowVectorXd path_m_mat(N_stft);
-        path_m_mat(N_stft-1) = static_cast<double>(m_opt_cpp + 1); // 存入 1 基准供输出
+        path_m_mat(N_stft-1) = static_cast<double>(m_opt_cpp + 1);
         double m_prev_cpp = dp_state[m_opt_cpp][N_stft-1](3);
         for (int t_cpp = N_stft-2; t_cpp >= 0; --t_cpp) {
             path_m_mat(t_cpp) = m_prev_cpp + 1.0;
@@ -233,31 +230,49 @@ void detect_line_spectrum_from_lofar_change(
                           alpha, beta, gamma, fs,
                           phi_f, f_window_start, num_windows, path_m_all, max_phi_window_all);
 
-    // 【核心修复】：正确的 99% 分位数计算
-    MatrixXd phi_f_mat = phi_f.matrix();
-    double d0 = prctile(phi_f_mat, 99);
+    // =========================================================================
+    // 【核心修复】：完全对齐 MATLAB 的 `findpeaks` 寻峰与门限算法
+    // =========================================================================
+    double mean_phi = phi_f.mean();
+    double std_phi = std::sqrt((phi_f.array() - mean_phi).square().sum() / (phi_f.size() - 1.0));
+    double thresh_phi = mean_phi + 1.5 * std_phi;
+
+    std::vector<std::pair<double, int>> all_peaks;
+    for (int i = 1; i < phi_f.size() - 1; ++i) {
+        if (phi_f(i) > phi_f(i - 1) && phi_f(i) > phi_f(i + 1) && phi_f(i) > thresh_phi) {
+            all_peaks.push_back({phi_f(i), i});
+        }
+    }
+    // 按振幅降序，进行 NMS 极大值抑制
+    std::sort(all_peaks.begin(), all_peaks.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
+
+    std::vector<int> valid_win_idx;
+    int minPeakDist = 8; // 对齐 MATLAB 的 'MinPeakDistance', 8
+    for (const auto& p : all_peaks) {
+        bool ok = true;
+        for (int vp : valid_win_idx) {
+            if (std::abs(p.second - vp) < minPeakDist) { ok = false; break; }
+        }
+        if (ok) valid_win_idx.push_back(p.second);
+    }
+    std::sort(valid_win_idx.begin(), valid_win_idx.end());
 
     counter = MatrixXi::Zero(M_stft, N_stft);
-    const int counter_thresh = 3;
 
-    for (int win_idx_cpp = 0; win_idx_cpp < num_windows; ++win_idx_cpp) {
-        double max_phi_window = max_phi_window_all(win_idx_cpp);
-        if (max_phi_window > d0) {
-            RowVectorXd path_m_mat = path_m_all.row(win_idx_cpp);
-
-            for (int t_cpp = 0; t_cpp < N_stft; ++t_cpp) {
-                int global_freq_idx_cpp = win_idx_cpp + static_cast<int>(path_m_mat(t_cpp)) - 1;
-
-                for(int w = -2; w <= 2; ++w) {
-                    int safe_idx = global_freq_idx_cpp + w;
-                    safe_idx = max(0, min(M_stft - 1, safe_idx));
-                    counter(safe_idx, t_cpp) = 1; // 填1而不是累加，对齐 MATLAB：counter(safe_idx, t) = 1;
-                }
+    // 仅将通过 findpeaks 筛选出的合法极大值路径赋予 1
+    for (int win_idx_cpp : valid_win_idx) {
+        RowVectorXd path_m_mat = path_m_all.row(win_idx_cpp);
+        for (int t_cpp = 0; t_cpp < N_stft; ++t_cpp) {
+            int global_freq_idx_cpp = win_idx_cpp + static_cast<int>(path_m_mat(t_cpp)) - 1;
+            for(int w = -2; w <= 2; ++w) {
+                int safe_idx = global_freq_idx_cpp + w;
+                safe_idx = max(0, min(M_stft - 1, safe_idx));
+                counter(safe_idx, t_cpp) = 1;
             }
         }
     }
 
-    // MATLAB 中的 find(counter > 0)
+    // 提取候选点列表
     vector<pair<int, int>> candidate_idx;
     for (int freq_idx_cpp = 0; freq_idx_cpp < M_stft; ++freq_idx_cpp) {
         for (int time_idx_cpp = 0; time_idx_cpp < N_stft; ++time_idx_cpp) {

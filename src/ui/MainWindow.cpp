@@ -203,19 +203,18 @@ void MainWindow::setupUi() {
     fFreq->addRow("长窗FFT (分析):", m_editNfftWin = new QLineEdit("30000"));
     paramLayout->addWidget(gFreq);
 
-    // 【同步自 MATLAB 参数】
     QGroupBox* gAzDet = new QGroupBox("空间谱方位寻峰门限", paramContainer);
     QFormLayout* fAzDet = new QFormLayout(gAzDet);
-    fAzDet->addRow("背景噪声容限乘子:", m_editAzDetBgMult = new QLineEdit("8.0")); // 同步自 max(bg_noise_level + 8, ...)
+    fAzDet->addRow("背景噪声容限乘子:", m_editAzDetBgMult = new QLineEdit("8.0"));
     fAzDet->addRow("旁瓣抑制比 (线性):", m_editAzDetSidelobeRatio = new QLineEdit("0.02"));
-    fAzDet->addRow("寻峰最小点距:", m_editAzDetPeakMinDist = new QLineEdit("3")); // 同步自 'MinPeakDistance', 3
+    fAzDet->addRow("寻峰最小点距:", m_editAzDetPeakMinDist = new QLineEdit("3"));
     paramLayout->addWidget(gAzDet);
 
     QGroupBox* gLofarExt = new QGroupBox("实时 LOFAR 线谱提取", paramContainer);
     QFormLayout* fLofarExt = new QFormLayout(gLofarExt);
-    fLofarExt->addRow("背景估计中值窗宽:", m_editLofarBgMedWindow = new QLineEdit("60")); // 同步自 medfilt1(spectrum_db, 60)
-    fLofarExt->addRow("SNR 阈值乘数:", m_editLofarSnrThreshMult = new QLineEdit("2.0")); // 同步自 mean(snr_db) + 2.0 * std(snr_db)
-    fLofarExt->addRow("寻峰最小点数间距:", m_editLofarPeakMinDist = new QLineEdit("15")); // 同步自 'MinPeakDistance', 15
+    fLofarExt->addRow("背景估计中值窗宽:", m_editLofarBgMedWindow = new QLineEdit("60"));
+    fLofarExt->addRow("SNR 阈值乘数:", m_editLofarSnrThreshMult = new QLineEdit("2.0"));
+    fLofarExt->addRow("寻峰最小点数间距:", m_editLofarPeakMinDist = new QLineEdit("15"));
     paramLayout->addWidget(gLofarExt);
 
     QGroupBox* gDemon = new QGroupBox("DEMON 包络数字滤波", paramContainer);
@@ -227,7 +226,7 @@ void MainWindow::setupUi() {
     QGroupBox* gDp = new QGroupBox("TPSW 与 DP 轨迹寻优", paramContainer);
     QFormLayout* fDp = new QFormLayout(gDp);
     fDp->addRow("TPSW 保护窗 (G):", m_editTpswG = new QLineEdit("45"));
-    fDp->addRow("TPSW 排除窗 (E):", m_editTpswE = new QLineEdit("10")); // 同步自 detect_line_spectrum_from_lofar_change2 默认 E=10
+    fDp->addRow("TPSW 排除窗 (E):", m_editTpswE = new QLineEdit("10"));
     fDp->addRow("TPSW 补偿因子 (C):", m_editTpswC = new QLineEdit("1.15"));
     fDp->addRow("DP 记忆窗长 (L):", m_editDpL = new QLineEdit("11"));
     fDp->addRow("惩罚因子 Alpha:", m_editDpAlpha = new QLineEdit("0.6"));
@@ -237,7 +236,7 @@ void MainWindow::setupUi() {
 
     QGroupBox* gDcv = new QGroupBox("高分辨反卷积 (DCV) 设置", paramContainer);
     QFormLayout* fDcv = new QFormLayout(gDcv);
-    fDcv->addRow("RL 迭代次数:", m_editDcvRlIter = new QLineEdit("25")); // 同步自 rl_iter = 25
+    fDcv->addRow("RL 迭代次数:", m_editDcvRlIter = new QLineEdit("10"));
     paramLayout->addWidget(gDcv);
 
     paramScroll->setWidget(paramContainer);
@@ -306,14 +305,46 @@ void MainWindow::setupUi() {
     tab1Layout->addWidget(horizontalSplitter);
     m_mainTabWidget->addTab(tab1, "💻 实时探测与关联");
 
+    // ====================================================================
+    // 【全新重构的 Tab2】：包含 CBF瀑布图、DCV瀑布图及目标切片对比
+    // ====================================================================
     QWidget* tab2 = new QWidget();
-    m_tab2Layout = new QVBoxLayout(tab2);
-    m_dcvWaterfallPlot = new QCustomPlot(tab2);
+    QVBoxLayout* tab2MainLayout = new QVBoxLayout(tab2);
+
+    QScrollArea* tab2Scroll = new QScrollArea(tab2);
+    tab2Scroll->setWidgetResizable(true);
+    tab2Scroll->setFrameShape(QFrame::NoFrame);
+
+    QWidget* tab2Container = new QWidget(tab2Scroll);
+    QVBoxLayout* tab2ContainerLayout = new QVBoxLayout(tab2Container);
+
+    QHBoxLayout* waterfallsLayout = new QHBoxLayout();
+
+    m_cbfWaterfallPlot = new QCustomPlot(tab2Container);
+    setupPlotInteraction(m_cbfWaterfallPlot);
+    m_cbfWaterfallPlot->setMinimumHeight(400);
+    m_cbfWaterfallPlot->plotLayout()->insertRow(0);
+    m_cbfWaterfallPlot->plotLayout()->addElement(0, 0, new QCPTextElement(m_cbfWaterfallPlot, "常规波束形成(CBF) 空间谱历程", QFont("sans", 12, QFont::Bold)));
+    waterfallsLayout->addWidget(m_cbfWaterfallPlot);
+
+    m_dcvWaterfallPlot = new QCustomPlot(tab2Container);
     setupPlotInteraction(m_dcvWaterfallPlot);
+    m_dcvWaterfallPlot->setMinimumHeight(400);
     m_dcvWaterfallPlot->plotLayout()->insertRow(0);
-    m_dcvWaterfallPlot->plotLayout()->addElement(0, 0, new QCPTextElement(m_dcvWaterfallPlot, "高分辨反卷积(DCV) 全方位时空谱历程", QFont("sans", 14, QFont::Bold)));
-    m_tab2Layout->addWidget(m_dcvWaterfallPlot);
-    m_mainTabWidget->addTab(tab2, "📊 后处理: 空间方位谱全景");
+    m_dcvWaterfallPlot->plotLayout()->addElement(0, 0, new QCPTextElement(m_dcvWaterfallPlot, "高分辨反卷积(DCV) 全方位时空谱历程", QFont("sans", 12, QFont::Bold)));
+    waterfallsLayout->addWidget(m_dcvWaterfallPlot);
+
+    tab2ContainerLayout->addLayout(waterfallsLayout);
+
+    m_sliceWidget = new QWidget(tab2Container);
+    m_sliceLayout = new QGridLayout(m_sliceWidget);
+    m_sliceLayout->setAlignment(Qt::AlignTop);
+    tab2ContainerLayout->addWidget(m_sliceWidget);
+
+    tab2Scroll->setWidget(tab2Container);
+    tab2MainLayout->addWidget(tab2Scroll);
+    m_mainTabWidget->addTab(tab2, "📊 后处理: 空间方位谱全景与切片");
+    // ====================================================================
 
     QWidget* tab3 = new QWidget();
     QVBoxLayout* tab3Layout = new QVBoxLayout(tab3);
@@ -345,6 +376,7 @@ void MainWindow::setupUi() {
     resize(1600, 1000);
     setWindowTitle("SonarTracker715 - 宽带方位动态跟踪与解耦系统");
 }
+
 void MainWindow::onSelectFilesClicked() {
     QString dir = QFileDialog::getExistingDirectory(this, "选择数据根目录", "");
     if (dir.isEmpty()) return;
@@ -379,7 +411,6 @@ void MainWindow::onStartClicked() {
     m_currentConfig.nfftR = m_editNfftR->text().toInt();
     m_currentConfig.nfftWin = m_editNfftWin->text().toInt();
 
-    // 【新增】：读取空间谱检测参数
     m_currentConfig.azDetBgMult = m_editAzDetBgMult->text().toDouble();
     m_currentConfig.azDetSidelobeRatio = m_editAzDetSidelobeRatio->text().toDouble();
     m_currentConfig.azDetPeakMinDist = m_editAzDetPeakMinDist->text().toInt();
@@ -418,7 +449,15 @@ void MainWindow::onStartClicked() {
     }
     m_lsPlots.clear(); m_lofarPlots.clear(); m_demonPlots.clear();
 
+    // 【新增】：一并清空 Tab2 的图表状态
+    if (m_cbfWaterfallPlot) { m_cbfWaterfallPlot->clearPlottables(); m_cbfWaterfallPlot->replot(); }
     if (m_dcvWaterfallPlot) { m_dcvWaterfallPlot->clearPlottables(); m_dcvWaterfallPlot->replot(); }
+    if (m_sliceLayout) {
+        while ((item = m_sliceLayout->takeAt(0)) != nullptr) {
+            if (item->widget()) delete item->widget();
+            delete item;
+        }
+    }
 
     while ((item = m_lofarWaterfallLayout->takeAt(0)) != nullptr) {
         if (item->widget()) delete item->widget();
@@ -586,13 +625,19 @@ void MainWindow::appendReport(const QString& report) { m_reportConsole->appendPl
 void MainWindow::onOfflineResultsReady(const QList<OfflineTargetResult>& results) {
     if (results.isEmpty()) return;
 
+    QLayoutItem* item;
+    while ((item = m_lofarWaterfallLayout->takeAt(0)) != nullptr) {
+        if (item->widget()) delete item->widget();
+        delete item;
+    }
+
     int col = 0;
     for (const auto& res : results) {
         QCustomPlot* pRaw = new QCustomPlot(m_lofarWaterfallWidget);
         setupPlotInteraction(pRaw);
         pRaw->setMinimumSize(400, 250); m_lofarWaterfallLayout->addWidget(pRaw, 0, col);
         pRaw->plotLayout()->insertRow(0);
-        pRaw->plotLayout()->addElement(0, 0, new QCPTextElement(pRaw, QString("目标%1 原始LOFAR谱 (自适应局部放大)").arg(res.targetId), QFont("sans", 10, QFont::Bold)));
+        pRaw->plotLayout()->addElement(0, 0, new QCPTextElement(pRaw, QString("目标%1 原始LOFAR谱 (随批次积累)").arg(res.targetId), QFont("sans", 10, QFont::Bold)));
         QCPColorMap *cmapRaw = new QCPColorMap(pRaw->xAxis, pRaw->yAxis);
         cmapRaw->data()->setSize(res.freqBins, res.timeFrames); cmapRaw->data()->setRange(QCPRange(0, m_currentConfig.fs/2.0), QCPRange(res.minTime, res.maxTime));
         double rmax = -999; for(double v : res.rawLofarDb) if(v > rmax) rmax = v;
@@ -615,6 +660,24 @@ void MainWindow::onOfflineResultsReady(const QList<OfflineTargetResult>& results
         cmapTpsw->setDataRange(QCPRange(-15.0, 0)); cmapTpsw->setTightBoundary(true);
         pTpsw->xAxis->setLabel("频率/Hz"); pTpsw->yAxis->setLabel("物理时间/s");
         pTpsw->xAxis->setRange(res.displayFreqMin, res.displayFreqMax); pTpsw->yAxis->setRange(res.minTime, res.maxTime);
+
+        QCPGraph *tpswTrackGraph = pTpsw->addGraph();
+        tpswTrackGraph->setLineStyle(QCPGraph::lsNone);
+        tpswTrackGraph->setScatterStyle(QCPScatterStyle(QCPScatterStyle::ssDisc, Qt::red, 3));
+
+        QVector<double> track_x, track_y;
+        double df_calc = (m_currentConfig.fs / 2.0) / (res.freqBins - 1);
+        double time_step = (res.maxTime - res.minTime) / std::max(1, res.timeFrames - 1);
+
+        for (int t = 0; t < res.timeFrames; ++t) {
+            for (int f = 0; f < res.freqBins; ++f) {
+                if (res.dpCounter[t * res.freqBins + f] > 0) {
+                    track_x.append(f * df_calc);
+                    track_y.append(res.minTime + t * time_step);
+                }
+            }
+        }
+        tpswTrackGraph->setData(track_x, track_y);
         updatePlotOriginalRange(pTpsw);
 
         QCustomPlot* pDp = new QCustomPlot(m_lofarWaterfallWidget);
@@ -632,6 +695,210 @@ void MainWindow::onOfflineResultsReady(const QList<OfflineTargetResult>& results
 
         col++;
     }
+
+    // 【修改】：调用重构后的全新 Tab2 绘制函数
+    updateTab2Plots();
+}
+
+// 【修改】：完全重写的 Tab2 联合绘图函数 (包含两张瀑布图与各目标对比切片)
+void MainWindow::updateTab2Plots() {
+    if (m_historyResults.isEmpty()) return;
+    int num_frames = m_historyResults.size();
+    double min_time = m_historyResults.first().timestamp;
+    double max_time = m_historyResults.last().timestamp;
+    if (std::abs(max_time - min_time) < 0.1) max_time = min_time + 3.0;
+
+    // ------------------------------------------------------------------
+    // 1. 绘制 CBF 和 DCV 瀑布图
+    // ------------------------------------------------------------------
+    m_cbfWaterfallPlot->clearPlottables();
+    m_dcvWaterfallPlot->clearPlottables();
+
+    int nx_uniform = 361;
+    QCPColorMap *cmapCbf = new QCPColorMap(m_cbfWaterfallPlot->xAxis, m_cbfWaterfallPlot->yAxis);
+    QCPColorMap *cmapDcv = new QCPColorMap(m_dcvWaterfallPlot->xAxis, m_dcvWaterfallPlot->yAxis);
+
+    cmapCbf->data()->setSize(nx_uniform, num_frames);
+    cmapCbf->data()->setRange(QCPRange(0, 180), QCPRange(min_time, max_time));
+    cmapDcv->data()->setSize(nx_uniform, num_frames);
+    cmapDcv->data()->setRange(QCPRange(0, 180), QCPRange(min_time, max_time));
+
+    double cbf_max = -9999.0, dcv_max = -9999.0;
+
+    for (int t = 0; t < num_frames; ++t) {
+        const auto& frame = m_historyResults[t];
+        const QVector<double>& theta_arr = frame.thetaAxis;
+        const QVector<double>& cbf_arr = frame.cbfData;
+        const QVector<double>& dcv_arr = frame.dcvData;
+
+        for (int x = 0; x < nx_uniform; ++x) {
+            double target_theta = x * 0.5;
+            double v_cbf = -120.0, v_dcv = -120.0;
+
+            if (theta_arr.size() > 1) {
+                if (target_theta <= theta_arr.first()) { v_cbf = cbf_arr.first(); v_dcv = dcv_arr.first(); }
+                else if (target_theta >= theta_arr.last()) { v_cbf = cbf_arr.last(); v_dcv = dcv_arr.last(); }
+                else {
+                    auto it = std::lower_bound(theta_arr.begin(), theta_arr.end(), target_theta);
+                    int idx = std::distance(theta_arr.begin(), it);
+                    if (idx > 0 && idx < theta_arr.size()) {
+                        double t1 = theta_arr[idx - 1], t2 = theta_arr[idx];
+                        double c1 = cbf_arr[idx - 1], c2 = cbf_arr[idx];
+                        double d1 = dcv_arr[idx - 1], d2 = dcv_arr[idx];
+                        if (t2 - t1 > 1e-6) {
+                            v_cbf = c1 + (c2 - c1) * (target_theta - t1) / (t2 - t1);
+                            v_dcv = d1 + (d2 - d1) * (target_theta - t1) / (t2 - t1);
+                        } else {
+                            v_cbf = c1; v_dcv = d1;
+                        }
+                    }
+                }
+            }
+            cmapCbf->data()->setCell(x, t, v_cbf);
+            cmapDcv->data()->setCell(x, t, v_dcv);
+            if (v_cbf > cbf_max) cbf_max = v_cbf;
+            if (v_dcv > dcv_max) dcv_max = v_dcv;
+        }
+    }
+
+    cmapCbf->setGradient(QCPColorGradient::gpJet);
+    cmapCbf->setInterpolate(true);
+    cmapCbf->setDataRange(QCPRange(cbf_max - 20.0, cbf_max));
+    cmapCbf->setTightBoundary(true);
+    m_cbfWaterfallPlot->xAxis->setLabel("方位角/°");
+    m_cbfWaterfallPlot->yAxis->setLabel("物理时间/s");
+    m_cbfWaterfallPlot->xAxis->setRange(0, 180);
+    m_cbfWaterfallPlot->yAxis->setRange(min_time, max_time);
+    m_cbfWaterfallPlot->replot();
+    updatePlotOriginalRange(m_cbfWaterfallPlot);
+
+    cmapDcv->setGradient(QCPColorGradient::gpJet);
+    cmapDcv->setInterpolate(true);
+    cmapDcv->setDataRange(QCPRange(dcv_max - 35.0, dcv_max));
+    cmapDcv->setTightBoundary(true);
+    m_dcvWaterfallPlot->xAxis->setLabel("方位角/°");
+    m_dcvWaterfallPlot->yAxis->setLabel("物理时间/s");
+    m_dcvWaterfallPlot->xAxis->setRange(0, 180);
+    m_dcvWaterfallPlot->yAxis->setRange(min_time, max_time);
+    m_dcvWaterfallPlot->replot();
+    updatePlotOriginalRange(m_dcvWaterfallPlot);
+
+    // ------------------------------------------------------------------
+    // 2. 生成各目标的特定方位频域切片图 (CBF vs DCV)
+    // ------------------------------------------------------------------
+    QLayoutItem* item;
+    while ((item = m_sliceLayout->takeAt(0)) != nullptr) {
+        if (item->widget()) delete item->widget();
+        delete item;
+    }
+
+    QSet<int> targetIds;
+    for (const auto& frame : m_historyResults) {
+        for (const auto& tr : frame.tracks) {
+            if (tr.isConfirmed) targetIds.insert(tr.id);
+        }
+    }
+
+    QList<int> sortedIds = targetIds.values();
+    std::sort(sortedIds.begin(), sortedIds.end());
+
+    int col = 0;
+    for (int tid : sortedIds) {
+        int active_frames = 0;
+        double sum_ang = 0.0;
+
+        QVector<double> slice_cbf_sum;
+        QVector<double> slice_dcv_sum;
+
+        for (const auto& frame : m_historyResults) {
+            for (const auto& tr : frame.tracks) {
+                if (tr.id == tid && tr.isActive && !tr.lofarFullLinear.isEmpty() && !tr.cbfLofarFullLinear.isEmpty()) {
+                    if (slice_dcv_sum.isEmpty()) {
+                        slice_cbf_sum.resize(tr.cbfLofarFullLinear.size());
+                        slice_dcv_sum.resize(tr.lofarFullLinear.size());
+                        slice_cbf_sum.fill(0.0); slice_dcv_sum.fill(0.0);
+                    }
+                    for(int i=0; i<slice_dcv_sum.size(); ++i) {
+                        slice_cbf_sum[i] += tr.cbfLofarFullLinear[i];
+                        slice_dcv_sum[i] += tr.lofarFullLinear[i];
+                    }
+                    sum_ang += tr.currentAngle;
+                    active_frames++;
+                    break;
+                }
+            }
+        }
+
+        if (active_frames > 0 && !slice_dcv_sum.isEmpty()) {
+            double avg_ang = sum_ang / active_frames;
+
+            std::vector<double> v_cbf(slice_cbf_sum.size()), v_dcv(slice_dcv_sum.size());
+            for(int i=0; i<slice_dcv_sum.size(); ++i) {
+                v_cbf[i] = slice_cbf_sum[i] / active_frames;
+                v_dcv[i] = slice_dcv_sum[i] / active_frames;
+            }
+
+            auto calculateMedianStd = [](std::vector<double> v) {
+                if (v.empty()) return 1e-12;
+                std::nth_element(v.begin(), v.begin() + v.size() / 2, v.end());
+                return v[v.size() / 2];
+            };
+
+            double med_cbf = calculateMedianStd(v_cbf);
+            double med_dcv = calculateMedianStd(v_dcv);
+            double max_cbf = *std::max_element(v_cbf.begin(), v_cbf.end());
+            double max_dcv = *std::max_element(v_dcv.begin(), v_dcv.end());
+
+            double cbf_snr = 10.0 * std::log10((max_cbf + 1e-12) / (med_cbf + 1e-12));
+            double dcv_snr = 10.0 * std::log10((max_dcv + 1e-12) / (med_dcv + 1e-12));
+            double gain_penalty = std::max(0.0, dcv_snr - cbf_snr);
+
+            QVector<double> f_axis(v_dcv.size());
+            QVector<double> cbf_db(v_cbf.size());
+            QVector<double> dcv_db(v_dcv.size());
+
+            double df_calc = (m_currentConfig.fs / 2.0) / (v_dcv.size() - 1);
+            for(int i=0; i<v_dcv.size(); ++i) {
+                f_axis[i] = i * df_calc;
+
+                double d_val = 10.0 * std::log10(v_dcv[i] / (max_dcv + 1e-12) + 1e-12);
+                double c_val = 10.0 * std::log10(v_cbf[i] / (max_cbf + 1e-12) + 1e-12) - gain_penalty;
+
+                dcv_db[i] = std::max(-80.0, d_val);
+                cbf_db[i] = std::max(-80.0, c_val);
+            }
+
+            QCustomPlot* pCbf = new QCustomPlot(m_sliceWidget);
+            setupPlotInteraction(pCbf);
+            pCbf->setMinimumSize(400, 250);
+            pCbf->addGraph(); pCbf->graph(0)->setPen(QPen(Qt::blue, 1.5));
+            pCbf->graph(0)->setData(f_axis, cbf_db);
+            pCbf->plotLayout()->insertRow(0);
+            pCbf->plotLayout()->addElement(0, 0, new QCPTextElement(pCbf, QString("目标%1 (约 %2°) - CBF").arg(tid).arg(avg_ang, 0, 'f', 1), QFont("sans", 10, QFont::Bold)));
+            pCbf->xAxis->setRange(m_currentConfig.lofarMin, m_currentConfig.lofarMax);
+            pCbf->yAxis->setRange(-80, 5);
+            if (col == 0) pCbf->yAxis->setLabel("功率 / dB");
+            pCbf->xAxis->setVisible(false);
+            m_sliceLayout->addWidget(pCbf, 0, col);
+            updatePlotOriginalRange(pCbf);
+
+            QCustomPlot* pDcv = new QCustomPlot(m_sliceWidget);
+            setupPlotInteraction(pDcv);
+            pDcv->setMinimumSize(400, 250);
+            pDcv->addGraph(); pDcv->graph(0)->setPen(QPen(Qt::red, 1.5));
+            pDcv->graph(0)->setData(f_axis, dcv_db);
+            pDcv->plotLayout()->insertRow(0);
+            pDcv->plotLayout()->addElement(0, 0, new QCPTextElement(pDcv, QString("目标%1 (约 %2°) - DCV").arg(tid).arg(avg_ang, 0, 'f', 1), QFont("sans", 10, QFont::Bold)));
+            pDcv->xAxis->setRange(m_currentConfig.lofarMin, m_currentConfig.lofarMax);
+            pDcv->yAxis->setRange(-80, 5);
+            pDcv->xAxis->setLabel("频率 / Hz");
+            if (col == 0) pDcv->yAxis->setLabel("功率 / dB");
+            m_sliceLayout->addWidget(pDcv, 1, col);
+            updatePlotOriginalRange(pDcv);
+
+            col++;
+        }
+    }
 }
 
 void MainWindow::onProcessingFinished() {
@@ -639,55 +906,6 @@ void MainWindow::onProcessingFinished() {
     m_btnStart->setEnabled(true); m_btnSelectFiles->setEnabled(true); m_btnLoadTruth->setEnabled(true);
     m_btnPauseResume->setEnabled(false); m_btnStop->setEnabled(false);
 
-    if (m_historyResults.isEmpty()) return;
-    int num_frames = m_historyResults.size();
-    double min_time = m_historyResults.first().timestamp;
-    double max_time = m_historyResults.last().timestamp;
-    if (std::abs(max_time - min_time) < 0.1) max_time = min_time + 3.0;
-
-    m_dcvWaterfallPlot->clearPlottables();
-    int nx_uniform = 361;
-    QCPColorMap *colorMap = new QCPColorMap(m_dcvWaterfallPlot->xAxis, m_dcvWaterfallPlot->yAxis);
-    colorMap->data()->setSize(nx_uniform, num_frames);
-    colorMap->data()->setRange(QCPRange(0, 180), QCPRange(min_time, max_time));
-
-    double dcv_max = -9999.0;
-    for (int t = 0; t < num_frames; ++t) {
-        const auto& frame = m_historyResults[t];
-        const QVector<double>& theta_arr = frame.thetaAxis;
-        const QVector<double>& dcv_arr = frame.dcvData;
-
-        for (int x = 0; x < nx_uniform; ++x) {
-            double target_theta = x * 0.5;
-            double val = -120.0;
-            if (theta_arr.size() > 1) {
-                if (target_theta <= theta_arr.first()) val = dcv_arr.first();
-                else if (target_theta >= theta_arr.last()) val = dcv_arr.last();
-                else {
-                    auto it = std::lower_bound(theta_arr.begin(), theta_arr.end(), target_theta);
-                    int idx = std::distance(theta_arr.begin(), it);
-                    if (idx > 0 && idx < theta_arr.size()) {
-                        double t1 = theta_arr[idx - 1], t2 = theta_arr[idx];
-                        double v1 = dcv_arr[idx - 1], v2 = dcv_arr[idx];
-                        if (t2 - t1 > 1e-6) val = v1 + (v2 - v1) * (target_theta - t1) / (t2 - t1);
-                        else val = v1;
-                    }
-                }
-            }
-            colorMap->data()->setCell(x, t, val);
-            if (val > dcv_max) dcv_max = val;
-        }
-    }
-
-    colorMap->setGradient(QCPColorGradient::gpJet);
-    colorMap->setInterpolate(true);
-    colorMap->setDataRange(QCPRange(dcv_max - 35.0, dcv_max));
-    colorMap->setTightBoundary(true);
-
-    m_dcvWaterfallPlot->xAxis->setLabel("方位角/°");
-    m_dcvWaterfallPlot->yAxis->setLabel("物理时间/s");
-    m_dcvWaterfallPlot->xAxis->setRange(0, 180);
-    m_dcvWaterfallPlot->yAxis->setRange(min_time, max_time);
-    m_dcvWaterfallPlot->replot();
-    updatePlotOriginalRange(m_dcvWaterfallPlot);
+    // 保证结束时再执行一次最终绘制
+    updateTab2Plots();
 }
