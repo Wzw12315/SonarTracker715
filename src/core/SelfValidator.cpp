@@ -274,13 +274,17 @@ void SelfValidator::onBatchFinished(int batchIndex, int startFrame, int endFrame
         logOutput += QString("  计算轴频: %1 Hz  |  真实轴频: %2 Hz\n").arg(feature.calDemon, 0, 'f', 1).arg(truth.trueDemonFreq, 0, 'f', 1);
         logOutput += QString("  计算方位: %1°  |  真实方位: %2°\n").arg(feature.calAngle, 0, 'f', 1).arg(realAngle, 0, 'f', 1);
         logOutput += QString("  计算深度: %1 m   |  真实深度: %2 m\n").arg(calDepth, 0, 'f', 1).arg(truth.trueDepth, 0, 'f', 1);
-        logOutput += QString("  综合判别: %1 -> %2\n").arg(estClassStr).arg(judgeStr);
-        logOutput += "----------------------------------------------------\n";
-    }
+        // ... 前面保持不变 ...
+                logOutput += QString("  综合判别: %1 -> %2\n").arg(estClassStr).arg(judgeStr);
+                logOutput += "----------------------------------------------------\n";
+            }
 
-    double accuracy = dspFeatures.empty() ? 0.0 : (correctCount * 100.0 / dspFeatures.size());
-    logOutput += QString("【系统验收结论】本批次识别正确率: %1%\n").arg(accuracy, 0, 'f', 2);
+            double accuracy = dspFeatures.empty() ? 0.0 : (correctCount * 100.0 / dspFeatures.size());
+            logOutput += QString("【系统验收结论】本批次识别正确率: %1%\n").arg(accuracy, 0, 'f', 2);
 
-    // 触发信号，将结果发给 MainWindow 显示
-    emit validationLogReady(logOutput);
-}
+            // 【新增】：把批次号和正确率发射出去给主界面保存
+            emit batchAccuracyComputed(batchIndex, accuracy);
+
+            // 触发信号，将结果发给 MainWindow 显示
+            emit validationLogReady(logOutput);
+        }

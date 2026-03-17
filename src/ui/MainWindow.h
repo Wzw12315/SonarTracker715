@@ -37,7 +37,8 @@ private slots:
     void onPlotContextMenu(const QPoint &pos);
     void onPlotMouseMove(QMouseEvent *event);
     void onPlotDoubleClick(QMouseEvent *event);
-
+    // 【新增】：接收正确率的槽函数
+        void onBatchAccuracyComputed(int batchIndex, double accuracy);
 private:
     void setupUi();
     void createTargetPlots(int targetId);
@@ -46,7 +47,8 @@ private:
 
     // 【修改】：将更新函数重命名，使其包含所有的 Tab2 绘图
     void updateTab2Plots();
-
+    // 【新增】：缓存每个批次的正确率
+        QList<QPair<int, double>> m_batchAccuracies;
     QLineEdit* m_editFs;
     QLineEdit* m_editM;
     QLineEdit* m_editD;

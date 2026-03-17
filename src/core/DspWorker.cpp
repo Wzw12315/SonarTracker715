@@ -519,104 +519,122 @@ void DspWorker::run() {
         frameIndex++;
     }
 
-    if (!m_isRunning) return;
+    // 【核心修复】：删除原来此处的 `if (!m_isRunning) return;`
+        // 使得点击终止按钮后，依然能强制继续往下走，进行最终报表的整理和输出！
 
-    double total_time_sec = globalTimer.elapsed() / 1000.0;
-    QString report = "\n======================================================\n                 高级航迹管理评估报告                 \n======================================================\n";
-    report += "【系统级总体评价】\n";
-    report += QString("  ▶ 全流程总计耗时: %1 秒\n").arg(total_time_sec, 0, 'f', 2);
-    report += QString("  ▶ 总计稳定识别目标个数: %1 个\n\n").arg(trackManager.getConfirmedTargetCount());
+        double total_time_sec = globalTimer.elapsed() / 1000.0;
+        QString report = "\n======================================================\n                 高级航迹管理评估报告                 \n======================================================\n";
+        report += "【系统级总体评价】\n";
+        report += QString("  ▶ 全流程总计耗时: %1 秒\n").arg(total_time_sec, 0, 'f', 2);
+        report += QString("  ▶ 总计稳定识别目标个数: %1 个\n\n").arg(trackManager.getConfirmedTargetCount());
 
-    report += "======================================================\n       目标最终特征提取池 (聚类线谱 + 统计轴频)       \n======================================================\n";
+        report += "======================================================\n       目标最终特征提取池 (聚类线谱 + 统计轴频)       \n======================================================\n";
 
-    for (int tid = 1; tid <= trackManager.getConfirmedTargetCount(); ++tid) {
-        std::vector<double> freqs, shafts;
-        int active_frames = 0;
-        for (const auto& frame : history_frames) {
-            for (const auto& t : frame.tracks) {
-                if (t.id == tid && t.isActive) {
-                    active_frames++;
-                    if (t.shaftFreq > 0) shafts.push_back(t.shaftFreq);
-                    for (double f : t.lineSpectra) freqs.push_back(f);
-                }
-            }
-        }
-        if (active_frames == 0) continue;
-
-        std::sort(freqs.begin(), freqs.end());
-        QString freqStr = "未检测到有效线谱";
-        if (!freqs.empty()) {
-            std::vector<double> final_f; std::vector<int> final_c;
-            std::vector<double> cur_cluster; cur_cluster.push_back(freqs[0]);
-
-            for (size_t i = 1; i < freqs.size(); ++i) {
-                if (freqs[i] - freqs[i-1] > 2.0) {
-                    final_f.push_back(calculateMedian(cur_cluster));
-                    final_c.push_back(cur_cluster.size());
-                    cur_cluster.clear();
-                }
-                cur_cluster.push_back(freqs[i]);
-            }
-            final_f.push_back(calculateMedian(cur_cluster)); final_c.push_back(cur_cluster.size());
-
-            std::vector<double> valid_f;
-            std::vector<int> valid_c;
-
-            int min_hit = std::max(2, (int)std::floor(0.20 * active_frames));
-            if (active_frames <= 2) min_hit = 1;
-
-            for (size_t i = 0; i < final_f.size(); ++i) {
-                if (final_c[i] >= min_hit) {
-                    valid_f.push_back(final_f[i]);
-                    valid_c.push_back(final_c[i]);
-                }
-            }
-
-            if (valid_f.empty()) {
-                freqStr = "发散或命中率极低 (已被系统滤除)";
-            } else {
-                freqStr = "";
-                for (size_t i = 0; i < valid_f.size(); ++i) {
-                    freqStr += QString("%1Hz(%2/%3)").arg(valid_f[i], 0, 'f', 1).arg(valid_c[i]).arg(active_frames);
-                    if (i != valid_f.size() - 1) freqStr += ", ";
-                }
-            }
-        }
-
-        double median_shaft = shafts.empty() ? 0.0 : calculateMedian(shafts);
-        report += QString("  ▶ 目标 %1 [高频线谱] : %2 \n").arg(tid).arg(freqStr);
-        if (median_shaft > 0) report += QString("             [低频轴频] : 稳定中心约 %1 Hz\n").arg(median_shaft, 0, 'f', 1);
-        else report += QString("             [低频轴频] : 未检测到\n");
-    }
-
-    report += "\n=================================================================================\n";
-    report += "                 目标每帧方位角动态跟踪表 (DCV vs CBF 精度对比)              \n";
-    report += "=================================================================================\n";
-    QString h1 = "| 帧号   | 时间(s)  ";
-    for (int tid = 1; tid <= trackManager.getConfirmedTargetCount(); ++tid) {
-        h1 += QString("|   目标%1(DCV/CBF)   ").arg(tid, -6);
-    }
-    report += h1 + "|\n|--------|----------";
-    for (int tid = 1; tid <= trackManager.getConfirmedTargetCount(); ++tid) report += "|--------------------------";
-    report += "|\n";
-
-    for (const auto& f : history_frames) {
-        QString row = QString("| %1 | %2 ").arg(f.frameIndex, -6).arg(f.timestamp, -8, 'f', 1);
         for (int tid = 1; tid <= trackManager.getConfirmedTargetCount(); ++tid) {
-            double ang_dcv = -1, ang_cbf = -1;
-            for(auto& tr : f.tracks) {
-                if(tr.id == tid) { ang_dcv = tr.currentAngle; ang_cbf = tr.currentAngleCbf; }
+            std::vector<double> freqs, shafts;
+            int active_frames = 0;
+            for (const auto& frame : history_frames) {
+                for (const auto& t : frame.tracks) {
+                    if (t.id == tid && t.isActive) {
+                        active_frames++;
+                        if (t.shaftFreq > 0) shafts.push_back(t.shaftFreq);
+                        for (double f : t.lineSpectra) freqs.push_back(f);
+                    }
+                }
             }
-            if(ang_dcv >= 0) row += QString("|  %1° / %2°       ").arg(ang_dcv, 5, 'f', 1).arg(ang_cbf, 5, 'f', 1);
-            else row += "| -                        ";
+            if (active_frames == 0) continue;
+
+            std::sort(freqs.begin(), freqs.end());
+            QString freqStr = "未检测到有效线谱";
+            int total_hits = 0;
+            int num_valid_lines = 0;
+
+            if (!freqs.empty()) {
+                std::vector<double> final_f; std::vector<int> final_c;
+                std::vector<double> cur_cluster; cur_cluster.push_back(freqs[0]);
+
+                for (size_t i = 1; i < freqs.size(); ++i) {
+                    if (freqs[i] - freqs[i-1] > 3.5) {
+                        final_f.push_back(calculateMedian(cur_cluster));
+                        final_c.push_back(cur_cluster.size());
+                        cur_cluster.clear();
+                    }
+                    cur_cluster.push_back(freqs[i]);
+                }
+                final_f.push_back(calculateMedian(cur_cluster)); final_c.push_back(cur_cluster.size());
+
+                std::vector<double> valid_f;
+                std::vector<int> valid_c;
+
+                int min_hit = std::max(2, (int)std::floor(0.20 * active_frames));
+                if (active_frames <= 2) min_hit = 1;
+
+                for (size_t i = 0; i < final_f.size(); ++i) {
+                    if (final_c[i] >= min_hit) {
+                        valid_f.push_back(final_f[i]);
+                        valid_c.push_back(final_c[i]);
+                    }
+                }
+
+                if (valid_f.empty()) {
+                    freqStr = "发散或命中率极低 (已被系统滤除)";
+                } else {
+                    freqStr = "";
+                    num_valid_lines = valid_f.size();
+                    for (size_t i = 0; i < valid_f.size(); ++i) {
+                        freqStr += QString("%1Hz(%2/%3)").arg(valid_f[i], 0, 'f', 1).arg(valid_c[i]).arg(active_frames);
+                        if (i != valid_f.size() - 1) freqStr += ", ";
+                        // 【累加命中总次数】
+                        total_hits += valid_c[i];
+                    }
+                }
+            }
+
+            double median_shaft = shafts.empty() ? 0.0 : calculateMedian(shafts);
+            report += QString("  ▶ 目标 %1 [高频线谱] : %2 \n").arg(tid).arg(freqStr);
+
+            // 【新增】：输出包含计算公式的百分比线谱正确率
+            if (num_valid_lines > 0 && active_frames > 0) {
+                int total_possible = num_valid_lines * active_frames;
+                double line_acc = (double)total_hits * 100.0 / total_possible;
+                report += QString("             [线谱提取正确率] : %1% (%2/%3)\n").arg(line_acc, 0, 'f', 2).arg(total_hits).arg(total_possible);
+            }
+
+            if (median_shaft > 0) report += QString("             [低频轴频] : 稳定中心约 %1 Hz\n").arg(median_shaft, 0, 'f', 1);
+            else report += QString("             [低频轴频] : 未检测到\n");
         }
-        report += row + "|\n";
+
+        // 【新增】：在此处放入占位符，MainWindow 会拦截并将批次总表渲染到这个位置
+        report += "\n[BATCH_ACCURACY_TABLE_PLACEHOLDER]\n";
+
+        report += "=================================================================================\n";
+        report += "                 目标每帧方位角动态跟踪表 (DCV vs CBF 精度对比)              \n";
+        report += "=================================================================================\n";
+        QString h1 = "| 帧号   | 时间(s)  ";
+        for (int tid = 1; tid <= trackManager.getConfirmedTargetCount(); ++tid) {
+            h1 += QString("|   目标%1(DCV/CBF)   ").arg(tid, -6);
+        }
+        report += h1 + "|\n|--------|----------";
+        for (int tid = 1; tid <= trackManager.getConfirmedTargetCount(); ++tid) report += "|--------------------------";
+        report += "|\n";
+
+        for (const auto& f : history_frames) {
+            QString row = QString("| %1 | %2 ").arg(f.frameIndex, -6).arg(f.timestamp, -8, 'f', 1);
+            for (int tid = 1; tid <= trackManager.getConfirmedTargetCount(); ++tid) {
+                double ang_dcv = -1, ang_cbf = -1;
+                for(auto& tr : f.tracks) {
+                    if(tr.id == tid) { ang_dcv = tr.currentAngle; ang_cbf = tr.currentAngleCbf; }
+                }
+                if(ang_dcv >= 0) row += QString("|  %1° / %2°       ").arg(ang_dcv, 5, 'f', 1).arg(ang_cbf, 5, 'f', 1);
+                else row += "| -                        ";
+            }
+            report += row + "|\n";
+        }
+        report += "=================================================================================\n";
+
+        emit reportReady(report);
+
+        fftw_destroy_plan(plan_ifft); fftw_free(demon_ifft_in); fftw_free(demon_ifft_out);
+        fftw_destroy_plan(plan_fft);  fftw_free(demon_fft_in);  fftw_free(demon_fft_out);
+        emit processingFinished();
     }
-    report += "=================================================================================\n";
-
-    emit reportReady(report);
-
-    fftw_destroy_plan(plan_ifft); fftw_free(demon_ifft_in); fftw_free(demon_ifft_out);
-    fftw_destroy_plan(plan_fft);  fftw_free(demon_fft_in);  fftw_free(demon_fft_out);
-    emit processingFinished();
-}

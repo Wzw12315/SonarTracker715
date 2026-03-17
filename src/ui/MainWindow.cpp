@@ -38,6 +38,10 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent),
             m_validator, &SelfValidator::onBatchFinished, Qt::QueuedConnection);
     connect(m_validator, &SelfValidator::validationLogReady,
             this, &MainWindow::appendReport, Qt::QueuedConnection);
+
+    // 【新增】：绑定正确率回传信号
+        connect(m_validator, &SelfValidator::batchAccuracyComputed,
+                this, &MainWindow::onBatchAccuracyComputed, Qt::QueuedConnection);
 }
 
 MainWindow::~MainWindow() {
@@ -438,6 +442,7 @@ void MainWindow::onStartClicked() {
     m_lblSysInfo->setText(QString("状态: 运行中\n开始时间: %1").arg(QDateTime::currentDateTime().toString("HH:mm:ss")));
 
     m_historyResults.clear();
+    m_batchAccuracies.clear(); // 【新增】：清空过往批次的正确率缓存
     m_timeAzimuthPlot->graph(0)->data()->clear();
     m_reportConsole->clear();
     m_logConsole->clear();
@@ -620,8 +625,30 @@ void MainWindow::onFrameProcessed(const FrameResult& result) {
 }
 
 void MainWindow::appendLog(const QString& log) { m_logConsole->appendPlainText(log); m_logConsole->moveCursor(QTextCursor::End); }
-void MainWindow::appendReport(const QString& report) { m_reportConsole->appendPlainText(report); m_reportConsole->moveCursor(QTextCursor::End); }
+void MainWindow::appendReport(const QString& report) {
+    QString finalReport = report;
 
+    // 【核心新增】：如果是最终报告，替换掉里面的占位符生成表格
+    if (finalReport.contains("[BATCH_ACCURACY_TABLE_PLACEHOLDER]")) {
+        QString table = "======================================================\n";
+        table += "             各批次综合识别正确率汇总表             \n";
+        table += "======================================================\n";
+        table += "| 批次号 | 识别正确率 |\n";
+        table += "|--------|------------|\n";
+        for (const auto& pair : m_batchAccuracies) {
+            table += QString("| 第 %1 批 | %2% |\n").arg(pair.first, -4).arg(pair.second, 8, 'f', 2);
+        }
+        if (m_batchAccuracies.isEmpty()) {
+            table += "| 无数据 |    ---     |\n";
+        }
+        table += "======================================================\n";
+
+        finalReport.replace("[BATCH_ACCURACY_TABLE_PLACEHOLDER]", table);
+    }
+
+    m_reportConsole->appendPlainText(finalReport);
+    m_reportConsole->moveCursor(QTextCursor::End);
+}
 void MainWindow::onOfflineResultsReady(const QList<OfflineTargetResult>& results) {
     if (results.isEmpty()) return;
 
@@ -661,23 +688,6 @@ void MainWindow::onOfflineResultsReady(const QList<OfflineTargetResult>& results
         pTpsw->xAxis->setLabel("频率/Hz"); pTpsw->yAxis->setLabel("物理时间/s");
         pTpsw->xAxis->setRange(res.displayFreqMin, res.displayFreqMax); pTpsw->yAxis->setRange(res.minTime, res.maxTime);
 
-        QCPGraph *tpswTrackGraph = pTpsw->addGraph();
-        tpswTrackGraph->setLineStyle(QCPGraph::lsNone);
-        tpswTrackGraph->setScatterStyle(QCPScatterStyle(QCPScatterStyle::ssDisc, Qt::red, 3));
-
-        QVector<double> track_x, track_y;
-        double df_calc = (m_currentConfig.fs / 2.0) / (res.freqBins - 1);
-        double time_step = (res.maxTime - res.minTime) / std::max(1, res.timeFrames - 1);
-
-        for (int t = 0; t < res.timeFrames; ++t) {
-            for (int f = 0; f < res.freqBins; ++f) {
-                if (res.dpCounter[t * res.freqBins + f] > 0) {
-                    track_x.append(f * df_calc);
-                    track_y.append(res.minTime + t * time_step);
-                }
-            }
-        }
-        tpswTrackGraph->setData(track_x, track_y);
         updatePlotOriginalRange(pTpsw);
 
         QCustomPlot* pDp = new QCustomPlot(m_lofarWaterfallWidget);
@@ -908,4 +918,8 @@ void MainWindow::onProcessingFinished() {
 
     // 保证结束时再执行一次最终绘制
     updateTab2Plots();
+}
+// 在文件靠下的地方加入这个函数
+void MainWindow::onBatchAccuracyComputed(int batchIndex, double accuracy) {
+    m_batchAccuracies.append(qMakePair(batchIndex, accuracy));
 }

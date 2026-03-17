@@ -5,7 +5,7 @@
 #include <QString>
 #include <vector>
 #include <unordered_map>
-#include <random> // 【新增】：引入随机数库
+#include <random>
 #include <Eigen/Dense>
 #include "DataTypes.h"
 
@@ -24,6 +24,8 @@ public slots:
 
 signals:
     void validationLogReady(const QString& logStr);
+    // 【新增】：当本批次正确率计算完毕时，向外发射
+    void batchAccuracyComputed(int batchIndex, double accuracy);
 
 private:
     std::vector<TargetTruth> m_truthData;
@@ -34,7 +36,7 @@ private:
     std::vector<double> m_rangeCopy;
     std::unordered_map<int, Eigen::MatrixXcf> m_replicaDict;
 
-    std::mt19937 m_randGen; // 【新增】：全局随机数引擎，避免每次重新播种产生相同的假随机序列
+    std::mt19937 m_randGen;
 
     void initDefaultTruthData();
 };
