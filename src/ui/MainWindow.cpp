@@ -14,6 +14,9 @@
 #include <QFile>
 #include <QTextStream>
 #include <QMessageBox>
+#include <QFileInfo>
+#include <QDir>
+#include <QRegularExpression>
 
 MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent),
     m_worker(new DspWorker(this)),
@@ -648,10 +651,78 @@ void MainWindow::onExportClicked() {
 
     file.close();
 
-    appendLog(QString("\n>> 成功：分析报表已完整导出至 %1\n").arg(fileName));
-    QMessageBox::information(this, "导出成功", "综合评估报表及运行日志已成功导出！\n(注：图表图片请在对应图表上右键保存)");
-}
+    // =================================================================
+    // 【核心新增】：导出当前绘制的所有图片到配套的文件夹中
+    // =================================================================
+    QFileInfo fileInfo(fileName);
+    // 生成与 txt 同级配套的文件夹路径
+    QString plotsDirPath = fileInfo.absolutePath() + "/" + fileInfo.completeBaseName() + "_Plots";
+    QDir dir;
+    if (!dir.exists(plotsDirPath)) {
+        dir.mkpath(plotsDirPath);
+    }
 
+    // 定义一个 Lambda 闭包函数：智能提取图表标题并保存
+    auto savePlot = [&](QCustomPlot* plot, const QString& defaultName) {
+        if (!plot) return;
+        QString title = defaultName;
+        // 尝试从图表上方提取文本元素（标题）
+        if (plot->plotLayout()->rowCount() > 0 && plot->plotLayout()->columnCount() > 0) {
+            if (auto* textElement = qobject_cast<QCPTextElement*>(plot->plotLayout()->element(0, 0))) {
+                if (!textElement->text().isEmpty()) {
+                    title = textElement->text();
+                }
+            }
+        }
+        // 替换 Windows/Linux 文件系统不支持的非法字符以及换行符，防止保存失败
+        title.replace(QRegularExpression("[\\\\/:*?\"<>|\\n]"), "_");
+
+        QString imgPath = plotsDirPath + "/" + title + ".png";
+        // 以控件当前的实际分辨率进行保存，保底为 800x600
+        int w = plot->width() > 0 ? plot->width() : 800;
+        int h = plot->height() > 0 ? plot->height() : 600;
+        plot->savePng(imgPath, w, h);
+    };
+
+    // 1. 保存 Tab1 实时探测界面的固定图表
+    savePlot(m_timeAzimuthPlot, "TimeAzimuthPlot");
+    savePlot(m_spatialPlot, "SpatialPlot");
+
+    // 2. 保存 Tab1 目标实时跟踪子图表 (遍历 QMap)
+    for (int tid : m_lsPlots.keys()) {
+        savePlot(m_lsPlots[tid], QString("Target_%1_LS").arg(tid));
+        savePlot(m_lofarPlots[tid], QString("Target_%1_LOFAR").arg(tid));
+        savePlot(m_demonPlots[tid], QString("Target_%1_DEMON").arg(tid));
+    }
+
+    // 3. 保存 Tab2 后处理全景瀑布图
+    savePlot(m_cbfWaterfallPlot, "CBF_Waterfall");
+    savePlot(m_dcvWaterfallPlot, "DCV_Waterfall");
+
+    // 4. 定义辅助函数：遍历网格布局并保存所有其中的 QCustomPlot
+    auto saveLayoutPlots = [&](QLayout* layout, const QString& fallbackPrefix) {
+        if (!layout) return;
+        for (int i = 0; i < layout->count(); ++i) {
+            if (QWidget* w = layout->itemAt(i)->widget()) {
+                if (QCustomPlot* cp = qobject_cast<QCustomPlot*>(w)) {
+                    savePlot(cp, QString("%1_%2").arg(fallbackPrefix).arg(i));
+                }
+            }
+        }
+    };
+
+    // 5. 保存 Tab2 中的各目标切片对比图
+    saveLayoutPlots(m_sliceLayout, "TargetSlice");
+
+    // 6. 保存 Tab3 中的历史累积 LOFAR 瀑布图与 DP 寻优图
+    saveLayoutPlots(m_lofarWaterfallLayout, "OfflineLofar");
+
+    appendLog(QString("\n>> 成功：分析报表已完整导出至 %1\n").arg(fileName));
+    appendLog(QString(">> 成功：所有配套图表已导出至文件夹 %1\n").arg(plotsDirPath));
+
+    QMessageBox::information(this, "导出成功",
+                             QString("综合评估报表及运行日志已成功导出！\n\n此外，当前所有图表（共计几十张）也已自动保存为PNG图片，位于同级配套目录：\n%1").arg(plotsDirPath));
+}
 void MainWindow::createTargetPlots(int targetId) {
     QCustomPlot* lsPlot = new QCustomPlot(this);
     setupPlotInteraction(lsPlot);
