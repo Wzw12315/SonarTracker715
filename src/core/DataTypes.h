@@ -22,10 +22,9 @@ struct DspConfig {
     int nfftR = 15000;
     int nfftWin = 30000;
 
-    // 【新增】：空间方位寻峰检测参数
-    double azDetBgMult = 5.0;         // 背景噪声容限乘子 (默认 5.0 倍 std)
-    double azDetSidelobeRatio = 0.02; // 旁瓣抑制比 (默认 0.02)
-    int azDetPeakMinDist = 2;        // 寻峰最小点数间距 (默认 2)
+    double azDetBgMult = 5.0;
+    double azDetSidelobeRatio = 0.02;
+    int azDetPeakMinDist = 2;
 
     int lofarBgMedWindow = 150;
     double lofarSnrThreshMult = 2.5;
@@ -36,51 +35,46 @@ struct DspConfig {
 
     double tpswG = 45.0;
     double tpswE = 2.0;
-    double tpswC = 1.15;   // 【新增】：TPSW 补偿因子 C
+    double tpswC = 1.15;
     int dpL = 5;
     double dpAlpha = 1.5;
     double dpBeta = 1.0;
     double dpGamma = 0.1;
-    // 【新增】：将批处理大小也加入全局配置，默认10
-        int batchSize = 10;
+
+    int batchSize = 40;
 };
 Q_DECLARE_METATYPE(DspConfig)
 
-// 目标的先验真值参数（对应 数据来源.docx 中的设定）
 struct TargetTruth {
     int id;
     QString name;
-    double initialAngle;    // 初始方位 (度)
-    double initialDistance; // 初始距离 (m)
-    double speed;           // 速度 (m/s)
-    double course;          // 运动航向角 (theta, 度)
-    double trueDepth;       // 真实深度 (REAL_DEPTH1, m)
-    std::vector<double> trueLofarFreqs; // 真值线谱
-    double trueDemonFreq;   // 真值轴频
+    double initialAngle;
+    double initialDistance;
+    double speed;
+    double course;
+    double trueDepth;
+    std::vector<double> trueLofarFreqs;
+    double trueDemonFreq;
 };
 
-// 信号处理模块每批次 (例如每40帧) 结束后的输出特征
 struct BatchTargetFeature {
     int formalId;
-    double calAngle;              // 计算角度 (CAL_JIAODU)
-    std::vector<double> calLofar; // 计算线谱 (CAL_FLINE)
-    double calDemon;              // 计算轴频 (CAL_FDEMON)
-    // 协方差矩阵 R_matrix 可以挂载在这里或通过其他引用传递给 MFP 深度计算
+    double calAngle;
+    std::vector<double> calLofar;
+    double calDemon;
 };
 
-// 定义单个目标的实时航迹状态
 struct TargetTrack {
-    int id;               // 正式对外暴露的目标 ID (仅转正后分配)
-    int internal_id;      // 内部跟踪分配的试探流水号
-    bool isConfirmed;     // 【新增】：是否已满足 M/N 确认条件
-    int totalHits;        // 【新增】：总计命中次数
-    int age;              // 【新增】：自创建以来的存活总帧数
+    int id;
+    int internal_id;
+    bool isConfirmed;
+    int totalHits;
+    int age;
 
     bool isActive;
     int missedCount;
     double currentAngle;
     double currentAngleCbf;
-
     int currentLoc;
 
     QVector<double> lofarSpectrum;
@@ -88,11 +82,10 @@ struct TargetTrack {
     QVector<double> lineSpectrumAmp;
 
     QVector<double> lofarFullLinear;
-    QVector<double> cbfLofarFullLinear; // 【新增】：保留当前位置的 CBF 原始谱用于对比
+    QVector<double> cbfLofarFullLinear;
 
     std::vector<double> lineSpectra;
     double shaftFreq;
-
 };
 Q_DECLARE_METATYPE(TargetTrack)
 
@@ -122,3 +115,23 @@ struct OfflineTargetResult {
     QVector<double> dpCounter;
 };
 Q_DECLARE_METATYPE(QList<OfflineTargetResult>)
+
+// =========================================================
+// 【新增】：用于前端渲染 Dashboard 驾驶舱的结构化评估结果
+// =========================================================
+struct TargetEvaluation {
+    int targetId;
+    QString lineSpectraStr;
+    double accuracy; // 百分比正确率 (0~100)
+    double shaftFreq;
+};
+Q_DECLARE_METATYPE(TargetEvaluation)
+
+struct SystemEvaluationResult {
+    double totalTimeSec;
+    double realtimeTimeSec;
+    double batchTimeSec;
+    int confirmedTargetCount;
+    QList<TargetEvaluation> targetEvals;
+};
+Q_DECLARE_METATYPE(SystemEvaluationResult)

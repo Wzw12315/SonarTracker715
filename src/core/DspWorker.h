@@ -24,9 +24,10 @@ signals:
     void reportReady(const QString& report);
     void offlineResultsReady(const QList<OfflineTargetResult>& results);
     void processingFinished();
-
     void batchFinished(int batchIndex, int startFrame, int endFrame, const std::vector<BatchTargetFeature>& features);
 
+    // 【新增】：抛出结构化仪表盘数据
+    void evaluationResultReady(const SystemEvaluationResult& result);
 protected:
     void run() override;
 

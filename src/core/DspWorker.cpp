@@ -40,11 +40,18 @@ static std::vector<int> findPeaks(const Eigen::VectorXd& data, int minPeakDistan
 static Eigen::VectorXd medfilt1(const Eigen::VectorXd& x, int w) {
     Eigen::VectorXd res(x.size());
     int half_w = w / 2;
+
+    std::vector<double> window;
+    window.reserve(w + 1);
+
+    const double* x_data = x.data();
     for (int i = 0; i < x.size(); ++i) {
         int start = std::max(0, i - half_w);
         int end = std::min((int)x.size() - 1, i + half_w);
-        std::vector<double> window(x.data() + start, x.data() + end + 1);
-        res(i) = calculateMedian(window);
+
+        window.assign(x_data + start, x_data + end + 1);
+        std::nth_element(window.begin(), window.begin() + window.size() / 2, window.end());
+        res(i) = window[window.size() / 2];
     }
     return res;
 }
@@ -65,8 +72,13 @@ void DspWorker::resume() { m_isPaused = false; }
 void DspWorker::run() {
     m_isRunning = true;
     m_isPaused = false;
+
     QElapsedTimer globalTimer;
     globalTimer.start();
+
+    qint64 totalRealtimeMs = 0;
+    qint64 totalBatchMs = 0;
+    QElapsedTimer sectionTimer;
 
     QMap<double, QStringList> timeToFilesMap;
     QDirIterator it(m_directory, QStringList() << "*.raw", QDir::Files, QDirIterator::Subdirectories);
@@ -126,11 +138,41 @@ void DspWorker::run() {
     QMap<int, QVector<double>> lastDemon;
     QMap<int, QVector<double>> lastLineAmp;
     QMap<int, QVector<double>> lastLofarFull;
-    QMap<int, QVector<double>> lastCbfLofarFull; // 【新增】：缓存 CBF 完整切片
+    QMap<int, QVector<double>> lastCbfLofarFull;
 
     int frameIndex = 1;
     int batchIndex = 1;
     int batchStartFrame = 1;
+
+    // =================================================================
+    // 【性能优化 1】：在进入主循环前，预计算静态的点扩散函数 (PSF) 矩阵
+    // =================================================================
+    int f_num = f_lofar.size();
+    int theta_len = theta_scan.size();
+
+    Eigen::MatrixXd precomputed_PSF(theta_len, f_num);
+    Eigen::VectorXd cos_th(theta_len);
+    for(int i = 0; i < theta_len; ++i) {
+        cos_th(i) = std::cos(theta_scan(i) * M_PI / 180.0);
+    }
+
+    for (int k = 0; k < f_num; ++k) {
+        Eigen::VectorXd u_y = f_lofar(k) * cos_th;
+        Eigen::VectorXd PSF_f(theta_len);
+        for (int i = 0; i < theta_len; ++i) {
+            double arg = M_PI * d * u_y(i) / c;
+            if (std::abs(arg) < 1e-9) {
+                PSF_f(i) = M * M;
+            } else {
+                double val = std::sin(M * arg) / std::sin(arg);
+                PSF_f(i) = val * val;
+            }
+        }
+        double max_psf = PSF_f.maxCoeff();
+        if (max_psf > 0) PSF_f /= max_psf;
+        precomputed_PSF.col(k) = PSF_f;
+    }
+    // =================================================================
 
     for (double current_time : timeToFilesMap.keys()) {
         while (m_isPaused && m_isRunning) QThread::msleep(100);
@@ -140,6 +182,8 @@ void DspWorker::run() {
         result.frameIndex = frameIndex;
         result.timestamp = current_time;
         const QStringList& targetFiles = timeToFilesMap[current_time];
+
+        sectionTimer.restart();
 
         try {
             Eigen::MatrixXd signal_raw = Eigen::MatrixXd::Zero(M, NFFT_R);
@@ -151,32 +195,13 @@ void DspWorker::run() {
             CBFResult cbf_res = cbf_engine.process(signal_w);
             Eigen::VectorXd p_cbf_spatial = cbf_res.P_cbf_spatial;
 
-            int f_num = f_lofar.size();
-            int theta_len = theta_scan.size();
             Eigen::MatrixXd P_dcv_out = Eigen::MatrixXd::Zero(theta_len, f_num);
             Eigen::MatrixXd P_dcv_out_energy = Eigen::MatrixXd::Zero(theta_len, f_num);
 
-            Eigen::VectorXd cos_th(theta_len);
-            for(int i = 0; i < theta_len; ++i) {
-                cos_th(i) = std::cos(theta_scan(i) * M_PI / 180.0);
-            }
-
+            #pragma omp parallel for
             for (int k = 0; k < f_num; ++k) {
                 Eigen::VectorXd P_f = cbf_res.P_out.col(k);
-                Eigen::VectorXd u_y = f_lofar(k) * cos_th;
-
-                Eigen::VectorXd PSF_f(theta_len);
-                for (int i = 0; i < theta_len; ++i) {
-                    double arg = M_PI * d * u_y(i) / c;
-                    if (std::abs(arg) < 1e-9) {
-                        PSF_f(i) = M * M;
-                    } else {
-                        double val = std::sin(M * arg) / std::sin(arg);
-                        PSF_f(i) = val * val;
-                    }
-                }
-                double max_psf = PSF_f.maxCoeff();
-                if (max_psf > 0) PSF_f /= max_psf;
+                Eigen::VectorXd PSF_f = precomputed_PSF.col(k);
 
                 Eigen::VectorXd dcv_norm = RL_1D(P_f, PSF_f, m_config.dcvRlIter);
 
@@ -185,8 +210,8 @@ void DspWorker::run() {
             }
 
             Eigen::VectorXd p_dcv_1d = P_dcv_out.rowwise().sum();
-
             Eigen::VectorXd Beamout_tmp = p_dcv_1d;
+
             std::vector<double> v_beam(Beamout_tmp.data(), Beamout_tmp.data() + Beamout_tmp.size());
             double mid = calculateMedian(v_beam);
             std::vector<double> v_diff(v_beam.size());
@@ -270,7 +295,6 @@ void DspWorker::run() {
                         t.lineSpectrumAmp[idx] = spectrum_db(idx);
                     }
 
-                    // --- 提取 DCV 完整切片 ---
                     Eigen::VectorXd full_lofar_linear = Eigen::VectorXd::Constant(half_fft, 1e-12);
                     double df_calc = fs / (double)NFFT_WIN;
                     auto f_lofar_vec = cbf_engine.getFLofar();
@@ -280,7 +304,6 @@ void DspWorker::run() {
                     }
                     t.lofarFullLinear = QVector<double>(full_lofar_linear.data(), full_lofar_linear.data() + full_lofar_linear.size());
 
-                    // --- 【新增】：提取 CBF 完整切片 ---
                     Eigen::VectorXd p_cbf_single = cbf_res.P_out.row(t.currentLoc);
                     Eigen::VectorXd full_cbf_linear = Eigen::VectorXd::Constant(half_fft, 1e-12);
                     for(int k = 0; k < f_lofar_vec.size(); ++k) {
@@ -289,34 +312,44 @@ void DspWorker::run() {
                     }
                     t.cbfLofarFullLinear = QVector<double>(full_cbf_linear.data(), full_cbf_linear.data() + full_cbf_linear.size());
 
-
                     std::complex<double> J(0, 1);
                     Eigen::MatrixXd Phase_demon = 2.0 * M_PI * tau_mat.row(t.currentLoc).transpose() * f_demon;
                     Eigen::MatrixXcd W_steer_demon = (J * Phase_demon).array().exp();
                     Eigen::RowVectorXcd beam_f_demon = (cbf_res.signal_fft_demon.array() * W_steer_demon.array()).colwise().sum();
 
+                    // =======================================================
+                    // 【防闪退保护】：严格校验 FFTW 数组写入边界
+                    // =======================================================
                     memset(demon_ifft_in, 0, sizeof(fftw_complex) * NFFT_WIN);
                     int demon_start_idx = std::round(m_config.demonMin * NFFT_WIN / fs);
-                    for(int i=0; i<beam_f_demon.size(); ++i) {
-                        demon_ifft_in[demon_start_idx + i][0] = beam_f_demon(i).real();
-                        demon_ifft_in[demon_start_idx + i][1] = beam_f_demon(i).imag();
+                    for(int i = 0; i < beam_f_demon.size(); ++i) {
+                        int target_idx = demon_start_idx + i;
+                        if (target_idx >= 0 && target_idx < NFFT_WIN) { // 核心保护
+                            demon_ifft_in[target_idx][0] = beam_f_demon(i).real();
+                            demon_ifft_in[target_idx][1] = beam_f_demon(i).imag();
+                        }
                     }
                     fftw_execute(plan_ifft);
 
                     Eigen::VectorXd rs_square(NFFT_WIN);
-                    for(int i=0; i<NFFT_WIN; ++i) rs_square(i) = demon_ifft_out[i] * demon_ifft_out[i];
+                    for(int i = 0; i < NFFT_WIN; ++i) rs_square(i) = demon_ifft_out[i] * demon_ifft_out[i];
 
                     FIR fir_demon(demon_lpf_coefs.data(), demon_lpf_coefs.size());
                     Eigen::VectorXd envlf(NFFT_WIN);
                     for(int i = 0; i < NFFT_WIN; ++i) envlf(i) = fir_demon.filter(rs_square(i));
                     Eigen::VectorXd s = envlf.array() - envlf.mean();
 
-                    for(int i=0; i<NFFT_WIN; ++i) demon_fft_in[i] = s(i);
+                    for(int i = 0; i < NFFT_WIN; ++i) demon_fft_in[i] = s(i);
                     fftw_execute(plan_fft);
 
+                    // 【防闪退保护】：防止提取频段超出 FFT_WIN 上限
                     int f_end_demon = (f_show * NFFT_WIN) / fs;
+                    f_end_demon = std::min(f_end_demon, NFFT_WIN - 1);
+
                     Eigen::VectorXd data_freq_amp(f_end_demon);
-                    for(int i=1; i<=f_end_demon; ++i) data_freq_amp(i-1) = std::sqrt(demon_fft_out[i][0]*demon_fft_out[i][0] + demon_fft_out[i][1]*demon_fft_out[i][1]);
+                    for(int i=1; i<=f_end_demon; ++i) {
+                        data_freq_amp(i-1) = std::sqrt(demon_fft_out[i][0]*demon_fft_out[i][0] + demon_fft_out[i][1]*demon_fft_out[i][1]);
+                    }
                     data_freq_amp /= (data_freq_amp.maxCoeff() + 1e-12);
                     t.demonSpectrum = QVector<double>(data_freq_amp.data(), data_freq_amp.data() + data_freq_amp.size());
 
@@ -330,7 +363,7 @@ void DspWorker::run() {
                     lastDemon[t.id] = t.demonSpectrum;
                     lastLineAmp[t.id] = t.lineSpectrumAmp;
                     lastLofarFull[t.id] = t.lofarFullLinear;
-                    lastCbfLofarFull[t.id] = t.cbfLofarFullLinear; // 【新增】
+                    lastCbfLofarFull[t.id] = t.cbfLofarFullLinear;
 
                     frameLog += QString("  ▶ 目标%1 (DCV:%2°, CBF:%3°) 实时轴频检测: %4 Hz\n")
                                 .arg(t.id).arg(t.currentAngle, 0, 'f', 1).arg(t.currentAngleCbf, 0, 'f', 1).arg(t.shaftFreq, 0, 'f', 1);
@@ -347,7 +380,7 @@ void DspWorker::run() {
                     t.demonSpectrum = lastDemon.value(t.id);
                     t.lineSpectrumAmp = lastLineAmp.value(t.id);
                     t.lofarFullLinear = lastLofarFull.value(t.id);
-                    t.cbfLofarFullLinear = lastCbfLofarFull.value(t.id); // 【新增】
+                    t.cbfLofarFullLinear = lastCbfLofarFull.value(t.id);
                 }
                 valid_confirmed_tracks.append(t);
             }
@@ -371,16 +404,19 @@ void DspWorker::run() {
             batch_frames.push_back(result);
             emit frameProcessed(result);
 
-        } catch (...) { continue; }
+        } catch (...) {
+            totalRealtimeMs += sectionTimer.elapsed();
+            continue;
+        }
 
-        // =====================================================================
-        // 批处理统计、特征计算与【实时滚动绘图】
-        // =====================================================================
+        totalRealtimeMs += sectionTimer.elapsed();
+
         if (batch_frames.size() == m_config.batchSize || frameIndex == timeToFilesMap.size()) {
+            sectionTimer.restart();
+
             std::vector<BatchTargetFeature> batchFeatures;
             int currentEndFrame = frameIndex;
 
-            // 1. 统计当前批次特征给综合报告
             for (int tid = 1; tid <= trackManager.getConfirmedTargetCount(); ++tid) {
                 std::vector<double> freqs, shafts;
                 int active_frames = 0;
@@ -437,9 +473,6 @@ void DspWorker::run() {
 
             emit batchFinished(batchIndex, batchStartFrame, currentEndFrame, batchFeatures);
 
-            // =================================================================
-            // 2. 随批次生成全量历史瀑布图与 DP 特征图
-            // =================================================================
             QList<OfflineTargetResult> offResults;
             for (int tid = 1; tid <= trackManager.getConfirmedTargetCount(); ++tid) {
                 std::vector<QVector<double>> tHistory;
@@ -511,6 +544,8 @@ void DspWorker::run() {
 
             emit offlineResultsReady(offResults);
 
+            totalBatchMs += sectionTimer.elapsed();
+
             batch_frames.clear();
             batchIndex++;
             batchStartFrame = frameIndex + 1;
@@ -519,122 +554,137 @@ void DspWorker::run() {
         frameIndex++;
     }
 
-    // 【核心修复】：删除原来此处的 `if (!m_isRunning) return;`
-        // 使得点击终止按钮后，依然能强制继续往下走，进行最终报表的整理和输出！
+    double total_time_sec = globalTimer.elapsed() / 1000.0;
+    double realtime_time_sec = totalRealtimeMs / 1000.0;
+    double batch_time_sec = totalBatchMs / 1000.0;
 
-        double total_time_sec = globalTimer.elapsed() / 1000.0;
-        QString report = "\n======================================================\n                 高级航迹管理评估报告                 \n======================================================\n";
-        report += "【系统级总体评价】\n";
-        report += QString("  ▶ 全流程总计耗时: %1 秒\n").arg(total_time_sec, 0, 'f', 2);
-        report += QString("  ▶ 总计稳定识别目标个数: %1 个\n\n").arg(trackManager.getConfirmedTargetCount());
+    SystemEvaluationResult evalRes;
+    evalRes.totalTimeSec = total_time_sec;
+    evalRes.realtimeTimeSec = realtime_time_sec;
+    evalRes.batchTimeSec = batch_time_sec;
+    evalRes.confirmedTargetCount = trackManager.getConfirmedTargetCount();
 
-        report += "======================================================\n       目标最终特征提取池 (聚类线谱 + 统计轴频)       \n======================================================\n";
+    QString report = "\n======================================================\n                 高级航迹管理评估报告                 \n======================================================\n";
+    report += "【系统级总体评价】\n";
+    report += QString("  ▶ 全流程总计耗时: %1 秒\n").arg(total_time_sec, 0, 'f', 2);
+    report += QString("      ▷ 实时逐帧解算耗时: %1 秒\n").arg(realtime_time_sec, 0, 'f', 2);
+    report += QString("      ▷ 离线批处理寻优耗时: %1 秒\n").arg(batch_time_sec, 0, 'f', 2);
+    report += QString("  ▶ 总计稳定识别目标个数: %1 个\n\n").arg(trackManager.getConfirmedTargetCount());
 
-        for (int tid = 1; tid <= trackManager.getConfirmedTargetCount(); ++tid) {
-            std::vector<double> freqs, shafts;
-            int active_frames = 0;
-            for (const auto& frame : history_frames) {
-                for (const auto& t : frame.tracks) {
-                    if (t.id == tid && t.isActive) {
-                        active_frames++;
-                        if (t.shaftFreq > 0) shafts.push_back(t.shaftFreq);
-                        for (double f : t.lineSpectra) freqs.push_back(f);
-                    }
+    report += "======================================================\n       目标最终特征提取池 (聚类线谱 + 统计轴频)       \n======================================================\n";
+
+    for (int tid = 1; tid <= trackManager.getConfirmedTargetCount(); ++tid) {
+        std::vector<double> freqs, shafts;
+        int active_frames = 0;
+        for (const auto& frame : history_frames) {
+            for (const auto& t : frame.tracks) {
+                if (t.id == tid && t.isActive) {
+                    active_frames++;
+                    if (t.shaftFreq > 0) shafts.push_back(t.shaftFreq);
+                    for (double f : t.lineSpectra) freqs.push_back(f);
                 }
             }
-            if (active_frames == 0) continue;
+        }
+        if (active_frames == 0) continue;
 
-            std::sort(freqs.begin(), freqs.end());
-            QString freqStr = "未检测到有效线谱";
-            int total_hits = 0;
-            int num_valid_lines = 0;
+        std::sort(freqs.begin(), freqs.end());
+        QString freqStr = "未检测到有效线谱";
+        int total_hits = 0;
+        int num_valid_lines = 0;
 
-            if (!freqs.empty()) {
-                std::vector<double> final_f; std::vector<int> final_c;
-                std::vector<double> cur_cluster; cur_cluster.push_back(freqs[0]);
+        if (!freqs.empty()) {
+            std::vector<double> final_f; std::vector<int> final_c;
+            std::vector<double> cur_cluster; cur_cluster.push_back(freqs[0]);
 
-                for (size_t i = 1; i < freqs.size(); ++i) {
-                    if (freqs[i] - freqs[i-1] > 3.5) {
-                        final_f.push_back(calculateMedian(cur_cluster));
-                        final_c.push_back(cur_cluster.size());
-                        cur_cluster.clear();
-                    }
-                    cur_cluster.push_back(freqs[i]);
+            for (size_t i = 1; i < freqs.size(); ++i) {
+                if (freqs[i] - freqs[i-1] > 3.5) {
+                    final_f.push_back(calculateMedian(cur_cluster));
+                    final_c.push_back(cur_cluster.size());
+                    cur_cluster.clear();
                 }
-                final_f.push_back(calculateMedian(cur_cluster)); final_c.push_back(cur_cluster.size());
+                cur_cluster.push_back(freqs[i]);
+            }
+            final_f.push_back(calculateMedian(cur_cluster)); final_c.push_back(cur_cluster.size());
 
-                std::vector<double> valid_f;
-                std::vector<int> valid_c;
+            std::vector<double> valid_f;
+            std::vector<int> valid_c;
 
-                int min_hit = std::max(2, (int)std::floor(0.20 * active_frames));
-                if (active_frames <= 2) min_hit = 1;
+            int min_hit = std::max(2, (int)std::floor(0.20 * active_frames));
+            if (active_frames <= 2) min_hit = 1;
 
-                for (size_t i = 0; i < final_f.size(); ++i) {
-                    if (final_c[i] >= min_hit) {
-                        valid_f.push_back(final_f[i]);
-                        valid_c.push_back(final_c[i]);
-                    }
-                }
-
-                if (valid_f.empty()) {
-                    freqStr = "发散或命中率极低 (已被系统滤除)";
-                } else {
-                    freqStr = "";
-                    num_valid_lines = valid_f.size();
-                    for (size_t i = 0; i < valid_f.size(); ++i) {
-                        freqStr += QString("%1Hz(%2/%3)").arg(valid_f[i], 0, 'f', 1).arg(valid_c[i]).arg(active_frames);
-                        if (i != valid_f.size() - 1) freqStr += ", ";
-                        // 【累加命中总次数】
-                        total_hits += valid_c[i];
-                    }
+            for (size_t i = 0; i < final_f.size(); ++i) {
+                if (final_c[i] >= min_hit) {
+                    valid_f.push_back(final_f[i]);
+                    valid_c.push_back(final_c[i]);
                 }
             }
 
-            double median_shaft = shafts.empty() ? 0.0 : calculateMedian(shafts);
-            report += QString("  ▶ 目标 %1             [线谱] : %2 \n").arg(tid).arg(freqStr);
-
-            // 【新增】：输出包含计算公式的百分比线谱正确率
-            if (num_valid_lines > 0 && active_frames > 0) {
-                int total_possible = num_valid_lines * active_frames;
-                double line_acc = (double)total_hits * 100.0 / total_possible;
-                report += QString("             [线谱提取正确率] : %1% (%2/%3)\n").arg(line_acc, 0, 'f', 2).arg(total_hits).arg(total_possible);
+            if (valid_f.empty()) {
+                freqStr = "发散或命中率极低 (已被系统滤除)";
+            } else {
+                freqStr = "";
+                num_valid_lines = valid_f.size();
+                for (size_t i = 0; i < valid_f.size(); ++i) {
+                    freqStr += QString("%1Hz(%2/%3)").arg(valid_f[i], 0, 'f', 1).arg(valid_c[i]).arg(active_frames);
+                    if (i != valid_f.size() - 1) freqStr += ", ";
+                    total_hits += valid_c[i];
+                }
             }
-
-            if (median_shaft > 0) report += QString("             [低频轴频] : 稳定中心约 %1 Hz\n").arg(median_shaft, 0, 'f', 1);
-            else report += QString("             [低频轴频] : 未检测到\n");
         }
 
-        // 【新增】：在此处放入占位符，MainWindow 会拦截并将批次总表渲染到这个位置
-        report += "\n[BATCH_ACCURACY_TABLE_PLACEHOLDER]\n";
+        double median_shaft = shafts.empty() ? 0.0 : calculateMedian(shafts);
+        report += QString("  ▶ 目标 %1             [线谱] : %2 \n").arg(tid).arg(freqStr);
 
-        report += "=================================================================================\n";
-        report += "                 目标每帧方位角动态跟踪表 (DCV vs CBF 精度对比)              \n";
-        report += "=================================================================================\n";
-        QString h1 = "| 帧号   | 时间(s)  ";
-        for (int tid = 1; tid <= trackManager.getConfirmedTargetCount(); ++tid) {
-            h1 += QString("|   目标%1(DCV/CBF)   ").arg(tid, -6);
+        double current_accuracy = 0.0;
+        if (num_valid_lines > 0 && active_frames > 0) {
+            int total_possible = num_valid_lines * active_frames;
+            current_accuracy = (double)total_hits * 100.0 / total_possible;
+            report += QString("             [线谱提取正确率] : %1% (%2/%3)\n").arg(current_accuracy, 0, 'f', 2).arg(total_hits).arg(total_possible);
         }
-        report += h1 + "|\n|--------|----------";
-        for (int tid = 1; tid <= trackManager.getConfirmedTargetCount(); ++tid) report += "|--------------------------";
-        report += "|\n";
 
-        for (const auto& f : history_frames) {
-            QString row = QString("| %1 | %2 ").arg(f.frameIndex, -6).arg(f.timestamp, -8, 'f', 1);
-            for (int tid = 1; tid <= trackManager.getConfirmedTargetCount(); ++tid) {
-                double ang_dcv = -1, ang_cbf = -1;
-                for(auto& tr : f.tracks) {
-                    if(tr.id == tid) { ang_dcv = tr.currentAngle; ang_cbf = tr.currentAngleCbf; }
-                }
-                if(ang_dcv >= 0) row += QString("|  %1° / %2°       ").arg(ang_dcv, 5, 'f', 1).arg(ang_cbf, 5, 'f', 1);
-                else row += "| -                        ";
-            }
-            report += row + "|\n";
-        }
-        report += "=================================================================================\n";
+        if (median_shaft > 0) report += QString("             [低频轴频] : 稳定中心约 %1 Hz\n").arg(median_shaft, 0, 'f', 1);
+        else report += QString("             [低频轴频] : 未检测到\n");
 
-        emit reportReady(report);
-
-        fftw_destroy_plan(plan_ifft); fftw_free(demon_ifft_in); fftw_free(demon_ifft_out);
-        fftw_destroy_plan(plan_fft);  fftw_free(demon_fft_in);  fftw_free(demon_fft_out);
-        emit processingFinished();
+        TargetEvaluation tEval;
+        tEval.targetId = tid;
+        tEval.lineSpectraStr = freqStr;
+        tEval.accuracy = current_accuracy;
+        tEval.shaftFreq = median_shaft;
+        evalRes.targetEvals.append(tEval);
     }
+
+    report += "\n[BATCH_ACCURACY_TABLE_PLACEHOLDER]\n";
+
+    emit evaluationResultReady(evalRes);
+
+    report += "=================================================================================\n";
+    report += "                 目标每帧方位角动态跟踪表 (DCV vs CBF 精度对比)              \n";
+    report += "=================================================================================\n";
+    QString h1 = "| 帧号   | 时间(s)  ";
+    for (int tid = 1; tid <= trackManager.getConfirmedTargetCount(); ++tid) {
+        h1 += QString("|   目标%1(DCV/CBF)   ").arg(tid, -6);
+    }
+    report += h1 + "|\n|--------|----------";
+    for (int tid = 1; tid <= trackManager.getConfirmedTargetCount(); ++tid) report += "|--------------------------";
+    report += "|\n";
+
+    for (const auto& f : history_frames) {
+        QString row = QString("| %1 | %2 ").arg(f.frameIndex, -6).arg(f.timestamp, -8, 'f', 1);
+        for (int tid = 1; tid <= trackManager.getConfirmedTargetCount(); ++tid) {
+            double ang_dcv = -1, ang_cbf = -1;
+            for(auto& tr : f.tracks) {
+                if(tr.id == tid) { ang_dcv = tr.currentAngle; ang_cbf = tr.currentAngleCbf; }
+            }
+            if(ang_dcv >= 0) row += QString("|  %1° / %2°       ").arg(ang_dcv, 5, 'f', 1).arg(ang_cbf, 5, 'f', 1);
+            else row += "| -                        ";
+        }
+        report += row + "|\n";
+    }
+    report += "=================================================================================\n";
+
+    emit reportReady(report);
+
+    fftw_destroy_plan(plan_ifft); fftw_free(demon_ifft_in); fftw_free(demon_ifft_out);
+    fftw_destroy_plan(plan_fft);  fftw_free(demon_fft_in);  fftw_free(demon_fft_out);
+    emit processingFinished();
+}

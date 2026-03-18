@@ -12,14 +12,11 @@ if(NOT CMAKE_BUILD_TYPE)
 endif()
 
 # 开启 O3 极限优化 和 本地 CPU AVX/SSE 指令集加速
+# -march=native 会让编译器自动榨干你当前 CPU 的全部潜能（含 AVX2/FMA 等）
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3 -march=native -DNDEBUG")
 
-# 寻找并链接 OpenMP (让 Eigen 自动多线程并行计算矩阵)
-find_package(OpenMP)
-if(OpenMP_CXX_FOUND)
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${OpenMP_CXX_FLAGS}")
-    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${OpenMP_EXE_LINKER_FLAGS}")
-endif()
+# 寻找 OpenMP (标记为 REQUIRED，找不到会直接在 CMake 阶段报错，防止你白白编译)
+find_package(OpenMP REQUIRED)
 # ==========================================
 
 set(CMAKE_AUTOMOC ON)
@@ -56,19 +53,22 @@ set(SOURCES
     src/core/fir2.cpp
     3rdparty/qcustomplot/qcustomplot.cpp
     3rdparty/qcustomplot/qcustomplot.h
-
     src/core/SelfValidator.h
     src/core/SelfValidator.cpp
 )
 
 add_executable(${PROJECT_NAME} ${SOURCES})
 
+# ==========================================
+# 【关键修复】：在此处显式链接 OpenMP
+# ==========================================
 target_link_libraries(${PROJECT_NAME} PRIVATE
     Qt5::Widgets
     Qt5::PrintSupport
     Qt5::Core
     Eigen3::Eigen
     fftw3
+    OpenMP::OpenMP_CXX   # <--- 现代 CMake 开启 OpenMP 的标准姿势
 )
 
 target_compile_definitions(${PROJECT_NAME} PRIVATE QCUSTOMPLOT_USE_LIBRARY)

@@ -12,15 +12,15 @@ CBFProcessor::CBFProcessor(int M, double d, double c, double r_scan, int fs, int
 {
     m_df = (double)m_fs / m_NFFT_WIN;
 
-    // 1. 生成阵元位置 x_v (完美等效 MATLAB mod(M,2) 的判断)
-    m_xv.resize(m_M); // <--- 【修改处：赋值给成员变量 m_xv】
+    // 1. 生成阵元位置 x_v
+    m_xv.resize(m_M);
     for (int i = 0; i < m_M; ++i) {
         double m_idx = i + 1; // 转为 1-based
         if (m_M % 2 == 1) m_xv(i) = (m_idx - std::ceil(m_M / 2.0)) * d;
         else              m_xv(i) = (m_idx - (m_M / 2.0 + 0.5)) * d;
     }
 
-    // 2. 生成 theta_scan (严丝合缝对齐 MATLAB 生成 257 个点的逻辑)
+    // 2. 生成 theta_scan
     double dete_cos = 2.0 / 256.0;
     theta_scan.resize(257);
     theta_scan(0) = 0.0;
@@ -33,7 +33,6 @@ CBFProcessor::CBFProcessor(int M, double d, double c, double r_scan, int fs, int
     for (int i = 0; i < theta_scan.size(); ++i) {
         double theta_rad = theta_scan(i) * M_PI / 180.0;
         for (int m = 0; m < m_M; ++m) {
-            // <--- 【修改处：调用 m_xv(m)】
             double Rm = std::sqrt(r_scan * r_scan + m_xv(m) * m_xv(m) - 2.0 * r_scan * m_xv(m) * std::cos(theta_rad));
             tau_matrix(i, m) = (Rm - r_scan) / c;
         }
@@ -92,21 +91,32 @@ CBFResult CBFProcessor::process(const Eigen::MatrixXd& signal_w) {
         }
     }
 
-    // 2. 高阶宽带波束形成 (极速并行实现)
+    // 2. 高阶宽带波束形成 (极速计算实现)
     res.P_out = Eigen::MatrixXd::Zero(theta_len, f_num);
-    res.P_cbf_spatial = Eigen::VectorXd::Zero(theta_len);
     std::complex<double> J(0, 1);
 
-    for (int ii = 0; ii < theta_len; ++ii) {
-        Eigen::MatrixXd Phase = 2.0 * M_PI * tau_matrix.row(ii).transpose() * f_lofar.transpose();
+    // ====================================================================
+    // 【核心优化】：基于频率循环，采用 Eigen 矩阵乘向量 (GEMV)
+    // 零临时内存分配，直接调用最底层的 AVX BLAS 数学运算库进行波束求和！
+    // ====================================================================
+    #pragma omp parallel for
+    for (int k = 0; k < f_num; ++k) {
+        // 生成当前频率下的导向相位矩阵 (theta_len x M)
+        Eigen::MatrixXd Phase = 2.0 * M_PI * f_lofar(k) * tau_matrix;
         Eigen::MatrixXcd W_steer = (J * Phase).array().exp();
 
-        Eigen::RowVectorXcd beam_f = (res.signal_fft_lofar.array() * W_steer.array()).colwise().sum();
-        Eigen::RowVectorXd p_out_row = 2.0 * beam_f.array().abs2() / m_df;
+        // 取出当前频率通道下所有麦克风的信号 (M x 1 向量)
+        Eigen::VectorXcd X_k = res.signal_fft_lofar.col(k);
 
-        res.P_out.row(ii) = p_out_row;
-        res.P_cbf_spatial(ii) = p_out_row.sum();
+        // 矩阵乘向量运算: (theta_len x M) * (M x 1) = (theta_len x 1)
+        Eigen::VectorXcd beam_f = W_steer * X_k;
+
+        // 转换为功率并存入结果列
+        res.P_out.col(k) = 2.0 * beam_f.cwiseAbs2() / m_df;
     }
+
+    // 全频带空间谱求和
+    res.P_cbf_spatial = res.P_out.rowwise().sum();
 
     return res;
 }

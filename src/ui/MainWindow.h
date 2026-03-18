@@ -11,26 +11,34 @@
 #include <QFormLayout>
 #include <QLineEdit>
 #include <QTabWidget>
+#include <QTableWidget>
+#include <QHeaderView>
 #include "qcustomplot.h"
 #include "../core/DspWorker.h"
 #include "../core/SelfValidator.h"
-#include <QDateTime> // 【新增】：用于三击时间判断
-#include <QPointer>  // 【新增】：用于安全指针
-// 【新增】：用于保存图表原始布局信息的结构体
+#include <QDateTime>
+#include <QPointer>
+
 struct PlotLayoutInfo {
     QWidget* originalParent = nullptr;
     QLayout* originalLayout = nullptr;
     int row = -1;
     int col = -1;
-    int index = -1; // 备用，用于非网格布局
+    int index = -1;
 };
+
+struct TargetClassInfo {
+    QString trueClass;
+    QString estClass;
+    bool isCorrect;
+};
+
 class MainWindow : public QMainWindow {
     Q_OBJECT
 public:
     explicit MainWindow(QWidget *parent = nullptr);
     ~MainWindow();
 protected:
-    // 【新增】：重写事件过滤器，用于捕获独立窗口的关闭/状态改变事件
     bool eventFilter(QObject *obj, QEvent *event) override;
 private slots:
     void onSelectFilesClicked();
@@ -48,23 +56,27 @@ private slots:
     void onPlotContextMenu(const QPoint &pos);
     void onPlotMouseMove(QMouseEvent *event);
     void onPlotDoubleClick(QMouseEvent *event);
+    void onBatchAccuracyComputed(int batchIndex, double accuracy);
 
-    // 【新增】：接收正确率的槽函数
-        void onBatchAccuracyComputed(int batchIndex, double accuracy);
+    void onEvaluationResultReady(const SystemEvaluationResult& result);
+
 private:
     void setupUi();
     void createTargetPlots(int targetId);
     void setupPlotInteraction(QCustomPlot* plot);
     void updatePlotOriginalRange(QCustomPlot* plot);
-
-    // 【修改】：将更新函数重命名，使其包含所有的 Tab2 绘图
     void updateTab2Plots();
-    // 【新增】：缓存每个批次的正确率
-        QList<QPair<int, double>> m_batchAccuracies;
 
-        // 【新增】：弹出和恢复图表的函数
-            void popOutPlot(QCustomPlot* plot);
-            void restorePlot(QWidget* popupWindow);
+    QWidget* createCardWidget(QLabel* contentLabel, const QString& bgColor, const QString& title);
+
+    QList<QPair<int, double>> m_batchAccuracies;
+    QMap<int, TargetClassInfo> m_targetClasses;
+
+    void popOutPlot(QCustomPlot* plot);
+    void restorePlot(QWidget* popupWindow);
+    // 【新增】：安全回收悬浮窗，防野指针闪退
+    void closePopupsFromLayout(QLayout* targetLayout);
+
     QLineEdit* m_editFs;
     QLineEdit* m_editM;
     QLineEdit* m_editD;
@@ -77,15 +89,12 @@ private:
     QLineEdit* m_editDemonMax;
     QLineEdit* m_editNfftR;
     QLineEdit* m_editNfftWin;
-
     QLineEdit* m_editAzDetBgMult;
     QLineEdit* m_editAzDetSidelobeRatio;
     QLineEdit* m_editAzDetPeakMinDist;
-
     QLineEdit* m_editLofarBgMedWindow;
     QLineEdit* m_editLofarSnrThreshMult;
     QLineEdit* m_editLofarPeakMinDist;
-
     QLineEdit* m_editFirOrder;
     QLineEdit* m_editFirCutoff;
     QLineEdit* m_editTpswG;
@@ -96,8 +105,8 @@ private:
     QLineEdit* m_editDpBeta;
     QLineEdit* m_editDpGamma;
     QLineEdit* m_editDcvRlIter;
-    // 【新增】：批处理大小输入框
-        QLineEdit* m_editBatchSize;
+    QLineEdit* m_editBatchSize;
+
     QPushButton* m_btnSelectFiles;
     QPushButton* m_btnLoadTruth;
     QPushButton* m_btnStart;
@@ -115,7 +124,6 @@ private:
     QWidget* m_targetPanelWidget;
     QGridLayout* m_targetLayout;
 
-    // 【修改】：Tab2 的布局与图表指针
     QCustomPlot* m_cbfWaterfallPlot;
     QCustomPlot* m_dcvWaterfallPlot;
     QWidget* m_sliceWidget;
@@ -123,6 +131,14 @@ private:
 
     QWidget* m_lofarWaterfallWidget;
     QGridLayout* m_lofarWaterfallLayout;
+
+    QLabel* m_lblStatTime;
+    QLabel* m_lblStatTargets;
+    QLabel* m_lblStatAvgAcc;
+    QTableWidget* m_tableTargetFeatures;
+    QCustomPlot* m_plotTargetAccuracy;
+    QCustomPlot* m_plotBatchAccuracy;
+    QCPBars* m_accuracyBars;
 
     QMap<int, QCustomPlot*> m_lsPlots;
     QMap<int, QCustomPlot*> m_lofarPlots;
@@ -134,8 +150,5 @@ private:
     QList<FrameResult> m_historyResults;
     QString m_currentDir;
     DspConfig m_currentConfig;
-
-
-        // 【新增】：存储图表原始布局信息，键为弹出的独立窗口指针
-        QMap<QWidget*, QPair<QCustomPlot*, PlotLayoutInfo>> m_popupPlots;
+    QMap<QWidget*, QPair<QCustomPlot*, PlotLayoutInfo>> m_popupPlots;
 };
