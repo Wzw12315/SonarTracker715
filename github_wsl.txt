@@ -1,0 +1,12 @@
+find . -type f -name "*:Zone.Identifier" -delete
+
+git status
+
+# 1. 将所有修改过的文件添加到暂存区
+git add .
+
+# 2. 提交这些修改，并写一句简短的备注（把引号里的字换成你这次实际改了什么）
+git commit -m "更新401-2"
+
+# 3. 推送到 GitHub 云端
+git push

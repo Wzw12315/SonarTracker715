@@ -1,0 +1,70 @@
+{
+  "targets": [
+    {
+      "id": 1,
+      "name": "Ship A (潜艇1)",
+      "initialAngle": 60.0,
+      "initialDistance": 20000.0,
+      "speed": 4.0,
+      "course": 45.0,
+      "trueDepth": 50.0,
+      "trueLofarFreqs": [125.0],
+      "trueDemonFreq": 2.1
+    },
+    {
+      "id": 2,
+      "name": "Ship B (潜艇2)",
+      "initialAngle": 80.0,
+      "initialDistance": 20000.0,
+      "speed": 5.0,
+      "course": 80.0,
+      "trueDepth": 60.0,
+      "trueLofarFreqs": [112.0],
+      "trueDemonFreq": 2.8
+    },
+    {
+      "id": 3,
+      "name": "Ship C (水面1)",
+      "initialAngle": 88.2,
+      "initialDistance": 20000.0,
+      "speed": 8.0,
+      "course": 85.0,
+      "trueDepth": 10.0,
+      "trueLofarFreqs": [120.0, 180.0, 240.0],
+      "trueDemonFreq": 4.2
+    },
+    {
+      "id": 4,
+      "name": "Ship D (水面2)",
+      "initialAngle": 90.0,
+      "initialDistance": 20000.0,
+      "speed": 7.0,
+      "course": 95.0,
+      "trueDepth": 8.0,
+      "trueLofarFreqs": [135.0, 180.0, 225.0, 270.0],
+      "trueDemonFreq": 5.5
+    },
+    {
+      "id": 5,
+      "name": "Ship E (水面3)",
+      "initialAngle": 120.0,
+      "initialDistance": 20000.0,
+      "speed": 9.0,
+      "course": 120.0,
+      "trueDepth": 12.0,
+      "trueLofarFreqs": [200.0, 250.0],
+      "trueDemonFreq": 6.8
+    },
+    {
+      "id": 6,
+      "name": "Ship F (水面4)",
+      "initialAngle": 140.0,
+      "initialDistance": 20000.0,
+      "speed": 10.0,
+      "course": 160.0,
+      "trueDepth": 15.0,
+      "trueLofarFreqs": [140.0, 280.0],
+      "trueDemonFreq": 8.1
+    }
+  ]
+}

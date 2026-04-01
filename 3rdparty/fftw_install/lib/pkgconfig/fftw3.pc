@@ -1,0 +1,11 @@
+prefix=/home/wzw/SonarTracker715/3rdparty/fftw-3.3.10/../fftw_install
+exec_prefix=${prefix}
+libdir=${exec_prefix}/lib
+includedir=${prefix}/include
+
+Name: FFTW
+Description: fast Fourier transform library
+Version: 3.3.10
+Libs: -L${libdir} -lfftw3 
+Libs.private: -lm
+Cflags: -I${includedir}

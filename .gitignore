@@ -1,0 +1,39 @@
+cat << 'EOF' > .gitignore
+# 1. 仿真数据与图片文件
+*.raw
+*.bin
+*.png
+*.fig
+*.mat
+
+# 2. Windows/WSL 复制粘贴产生的系统垃圾
+*:Zone.Identifier
+*.Zone.Identifier
+.DS_Store
+Thumbs.db
+
+# 3. Qt / C++ 编译生成的临时文件和垃圾文件夹
+build/
+build-*/
+SAVE/
+SAVE-*/
+*.pro.user
+*.pro.user.*
+*.qmake.stash
+.qmake.cache
+Makefile*
+*.o
+*.obj
+*.exe
+*.dll
+*.so
+*.a
+moc_*
+qrc_*
+ui_*
+
+# 如果你未来用 CMake 编译，屏蔽 CMake 缓存
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+EOF

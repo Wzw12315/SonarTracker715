@@ -1,0 +1,44 @@
+{
+  "targets": [
+    {
+      "id": 1,
+      "name": "Ship A",
+      "initialAngle": 60.0,
+      "initialDistance": 20000.0,
+      "speed": 4.0,
+      "course": 45.0,
+      "trueDemonFreq": 2.1,
+      "trueLofarFreqs": [125.0]
+    },
+    {
+      "id": 2,
+      "name": "Ship B",
+      "initialAngle": 80.0,
+      "initialDistance": 20000.0,
+      "speed": 5.0,
+      "course": 80.0,
+      "trueDemonFreq": 2.8,
+      "trueLofarFreqs": [112.0]
+    },
+    {
+      "id": 3,
+      "name": "Ship C",
+      "initialAngle": 88.2,
+      "initialDistance": 20000.0,
+      "speed": 8.0,
+      "course": 85.0,
+      "trueDemonFreq": 4.2,
+      "trueLofarFreqs": [120.0, 180.0, 240.0]
+    },
+    {
+      "id": 4,
+      "name": "Ship D",
+      "initialAngle": 90.0,
+      "initialDistance": 20000.0,
+      "speed": 7.0,
+      "course": 95.0,
+      "trueDemonFreq": 5.5,
+      "trueLofarFreqs": [135.0, 180.0, 225.0, 270.0]
+    }
+  ]
+}
