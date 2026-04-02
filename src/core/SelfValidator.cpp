@@ -81,18 +81,18 @@ double SelfValidator::calculateTheoreticalAngle(int targetId, double timeSeconds
     auto it = std::find_if(m_truthData.begin(), m_truthData.end(), [targetId](const TargetTruth& t) { return t.id == targetId; });
     if (it == m_truthData.end()) return -1.0;
 
-    double X0 = it->initialDistance * std::cos(it->initialAngle * M_PI / 180.0);
-    double Y0 = it->initialDistance * std::sin(it->initialAngle * M_PI / 180.0);
-    double X = X0 + it->speed * std::cos(it->course * M_PI / 180.0) * timeSeconds;
-    double Y = Y0 + it->speed * std::sin(it->course * M_PI / 180.0) * timeSeconds;
+    // 【彻底对齐标准航海坐标系，解决漂移问题】
+    double X0 = it->initialDistance * std::sin(it->initialAngle * M_PI / 180.0);
+    double Y0 = it->initialDistance * std::cos(it->initialAngle * M_PI / 180.0);
+    double X = X0 + it->speed * std::sin(it->course * M_PI / 180.0) * timeSeconds;
+    double Y = Y0 + it->speed * std::cos(it->course * M_PI / 180.0) * timeSeconds;
 
-    double angleRad = std::atan2(Y, X);
+    double angleRad = std::atan2(X, Y);
     double angleDeg = angleRad * 180.0 / M_PI;
     if (angleDeg < 0) angleDeg += 360.0;
 
     return angleDeg;
 }
-
 // =========================================================================
 // 3. 深度字典加载与底层 MFP 估算算法 (恢复被误删的代码)
 // =========================================================================
@@ -198,9 +198,7 @@ double SelfValidator::estimateDepthMFP(double true_depth, double true_range_km, 
     return m_depthCopy[best_depth_idx];
 }
 
-// =========================================================================
-// 4. 批次评估与打分体系
-// =========================================================================
+
 void SelfValidator::onBatchFinished(int batchIndex, int startFrame, int endFrame, const std::vector<BatchTargetFeature>& features) {
     if (m_truthData.empty()) return;
 
@@ -209,6 +207,7 @@ void SelfValidator::onBatchFinished(int batchIndex, int startFrame, int endFrame
     log += QString("======================================================\n");
 
     int correctCount = 0;
+    QList<TargetEvaluation> mfpResults; // 准备发给表二的包裹
 
     for (const auto& feature : features) {
         TargetTruth bestTruth;
@@ -220,7 +219,6 @@ void SelfValidator::onBatchFinished(int batchIndex, int startFrame, int endFrame
                 break;
             }
         }
-
         if (!foundTruth) continue;
 
         log += QString("▶ 目标 %1：%2\n").arg(feature.formalId).arg(bestTruth.name);
@@ -249,10 +247,10 @@ void SelfValidator::onBatchFinished(int batchIndex, int startFrame, int endFrame
                .arg(feature.calAngle, 0, 'f', 1).arg(realAngle, 0, 'f', 1);
 
         if (m_enableDepthResolve) {
-            double X0 = bestTruth.initialDistance * std::cos(bestTruth.initialAngle * M_PI / 180.0);
-            double Y0 = bestTruth.initialDistance * std::sin(bestTruth.initialAngle * M_PI / 180.0);
-            double X = X0 + bestTruth.speed * std::cos(bestTruth.course * M_PI / 180.0) * timeSeconds;
-            double Y = Y0 + bestTruth.speed * std::sin(bestTruth.course * M_PI / 180.0) * timeSeconds;
+            double X0 = bestTruth.initialDistance * std::sin(bestTruth.initialAngle * M_PI / 180.0);
+            double Y0 = bestTruth.initialDistance * std::cos(bestTruth.initialAngle * M_PI / 180.0);
+            double X = X0 + bestTruth.speed * std::sin(bestTruth.course * M_PI / 180.0) * timeSeconds;
+            double Y = Y0 + bestTruth.speed * std::cos(bestTruth.course * M_PI / 180.0) * timeSeconds;
             double current_range_km = std::sqrt(X*X + Y*Y) / 1000.0;
 
             std::vector<double> mf_freqs = feature.calLofarDcv.empty() ? feature.calLofar : feature.calLofarDcv;
@@ -264,52 +262,53 @@ void SelfValidator::onBatchFinished(int batchIndex, int startFrame, int endFrame
             bool isEstSub = (calDepth > 20.0);
             bool isTrueSub = (bestTruth.trueDepth > 20.0);
             QString estClassStr = isEstSub ? "水下潜艇" : "水面舰船";
+            QString trueClassStr = isTrueSub ? "水下潜艇" : "水面舰船";
             QString judgeStr = (isEstSub == isTrueSub) ? "判别正确" : "判别错误";
 
             log += QString("  综合判别: [%1] -> %2\n").arg(estClassStr).arg(judgeStr);
 
             if (isEstSub == isTrueSub) correctCount++;
+
+            // 【发射给主界面表二】
+            TargetEvaluation mfpEval;
+            mfpEval.targetId = feature.formalId;
+            mfpEval.estimatedDepth = calDepth;
+            mfpEval.trueDepth = bestTruth.trueDepth;
+            mfpEval.targetClass = estClassStr;
+            mfpEval.trueClass = trueClassStr;
+            mfpEval.isMfpCorrect = (isEstSub == isTrueSub);
+            mfpResults.append(mfpEval);
+
         } else {
             double score = evaluateMatch(feature, bestTruth);
             bool isCorrect = (score >= 50.0);
             log += QString("  综合判别: 置信度得分 %1 -> 判别%2\n").arg(score, 0, 'f', 1).arg(isCorrect ? "正确" : "错误");
             if (isCorrect) correctCount++;
         }
-
         log += "----------------------------------------------------\n";
     }
 
-    // 找到这一行（之前是只计算 correctCount）
-        // double batchAccuracy = features.empty() ? 0.0 : (double)correctCount / features.size() * 100.0;
-
-        // ==========================================================
-        // 【核心修复三：根据开关精准上传批次正确率给折线图】
-        // ==========================================================
-        double batchAccuracy = 0.0;
-        if (m_enableDepthResolve) {
-            // 如果开启了 MFP，正确率按水上/水下判别统计
-            int valid_mfp_count = 0;
-            for (const auto& feature : features) {
-                TargetTruth truth;
-                bool found = false;
-                for(const auto& t: m_truthData) { if(t.id == feature.formalId) { truth = t; found = true; break; } }
-                // 我们只需要知道他参没参与 MFP 评估
-                if (found && truth.trueDepth >= 0) valid_mfp_count++;
-            }
-            batchAccuracy = (valid_mfp_count == 0) ? 0.0 : (double)correctCount / valid_mfp_count * 100.0;
-            log += QString("【系统验收结论】本批次 水上/水下分辨正确率: %1%\n").arg(batchAccuracy, 0, 'f', 2);
-        } else {
-            // 未开启时，按常规置信度评分统计
-            batchAccuracy = features.empty() ? 0.0 : (double)correctCount / features.size() * 100.0;
-            log += QString("【系统验收结论】本批次 置信度匹配正确率: %1%\n").arg(batchAccuracy, 0, 'f', 2);
+    double batchAccuracy = 0.0;
+    if (m_enableDepthResolve) {
+        int valid_mfp_count = 0;
+        for (const auto& feature : features) {
+            TargetTruth truth; bool found = false;
+            for(const auto& t: m_truthData) { if(t.id == feature.formalId) { truth = t; found = true; break; } }
+            if (found && truth.trueDepth >= 0) valid_mfp_count++;
         }
-
-        emit validationLogReady(log);
-
-        // 这句话是给主界面图表发送数据的唯一源头！
-        emit batchAccuracyComputed(batchIndex, batchAccuracy);
+        batchAccuracy = (valid_mfp_count == 0) ? 0.0 : (double)correctCount / valid_mfp_count * 100.0;
+        log += QString("【系统验收结论】本批次 水上/水下分辨正确率: %1%\n").arg(batchAccuracy, 0, 'f', 2);
+    } else {
+        batchAccuracy = features.empty() ? 0.0 : (double)correctCount / features.size() * 100.0;
+        log += QString("【系统验收结论】本批次 置信度匹配正确率: %1%\n").arg(batchAccuracy, 0, 'f', 2);
     }
 
+    emit validationLogReady(log);
+    emit batchAccuracyComputed(batchIndex, batchAccuracy);
+
+    // 把完美深度的结果发送给前端！
+    if (!mfpResults.isEmpty()) emit mfpResultReady(mfpResults);
+}
 
 double SelfValidator::evaluateMatch(const BatchTargetFeature& feature, const TargetTruth& truth) {
     double score = 0.0;

@@ -6,7 +6,7 @@
 #include <vector>
 #include <map>
 #include <random>
-#include <Eigen/Dense>   // 必须引入 Eigen 否则 MatrixXcf 报错
+#include <Eigen/Dense>
 #include "DataTypes.h"
 
 class SelfValidator : public QObject {
@@ -19,7 +19,6 @@ public:
     double calculateTheoreticalAngle(int targetId, double timeSeconds);
     const std::vector<TargetTruth>& getTruthData() const { return m_truthData; }
 
-    // 【新增】：接收来自界面的 MFP 开关状态
     void setDepthResolveEnabled(bool enabled) { m_enableDepthResolve = enabled; }
 
 public slots:
@@ -28,15 +27,13 @@ public slots:
 signals:
     void validationLogReady(const QString& logStr);
     void batchAccuracyComputed(int batchIndex, double accuracy);
+    void mfpResultReady(const QList<TargetEvaluation>& mfpResults); // 【新增】将完美判决发给 UI
 
 private:
     std::vector<TargetTruth> m_truthData;
     void initDefaultTruthData();
     double evaluateMatch(const BatchTargetFeature& feature, const TargetTruth& truth);
 
-    // =======================================================
-    // 【核心修复】：声明 MFP 深度分辨相关的成员变量和底层函数
-    // =======================================================
     bool m_enableDepthResolve = false;
 
     void loadReplicaFields(const QString& rawPath);

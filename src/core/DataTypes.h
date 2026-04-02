@@ -5,7 +5,6 @@
 #include <QMetaType>
 #include <vector>
 
-// 全局信号处理配置参数
 struct DspConfig {
     double fs = 5000.0;
     int M = 512;
@@ -37,21 +36,18 @@ struct DspConfig {
     int firOrder = 64;
     double firCutoff = 0.1;
 
-    // 【针对低 SNR 环境优化的后处理参数】
-        double tpswG = 45.0;     // 保护窗保持 45（约 7.5Hz）评估局部背景足够了
-        double tpswE = 10.0;     // 【调大】排除窗，防止弱信号的主瓣展宽被误认为背景
-        double tpswC = 1.25;     // 【调大】补偿因子，拉高检测门限，压制大量离散噪声点
+    double tpswG = 45.0;
+    double tpswE = 10.0;
+    double tpswC = 1.25;
 
-        int dpL = 3;             // 【调小】搜索限制窗，严禁航迹大跨度跳跃
-        double dpAlpha = 2.5;    // 【大幅调大】惩罚因子，强制提取出连贯、平滑的直线特征
-        double dpBeta = 0.8;     // 【调小】幅度权重，削弱对瞬时高亮噪声点的盲目追随
-        double dpGamma = 0.1;
-        // 【新增】：暴露的 DP 门限参数
-            double dpPrctileThresh = 99.0;   // DP 状态判决门限 (分位数，默认 99.0)
-            double dpPeakStdMult = 1.5;      // DP 寻峰提取门限 (标准差乘子，默认 1.5)
+    int dpL = 3;
+    double dpAlpha = 2.5;
+    double dpBeta = 0.8;
+    double dpGamma = 0.1;
+    double dpPrctileThresh = 99.0;
+    double dpPeakStdMult = 1.5;
     int batchSize = 40;
 
-    // 【新增】：航迹关联与生命周期参数
     double trackAssocGate = 6.0;
     int trackMHits = 10;
 
@@ -59,22 +55,24 @@ struct DspConfig {
     QString krakenRawPath = "";
 };
 Q_DECLARE_METATYPE(DspConfig)
+
 struct TargetTruth {
     int id;
     QString name;
-    double initialAngle;      // 起始方位(度)
-    double initialDistance;   // 起始距离(m)
-    double speed;             // 航速(m/s)
-    double course;            // 航向(度)
-    std::vector<double> trueLofarFreqs; // 真实线谱群
-    double trueDemonFreq;     // 真实轴频
+    double initialAngle;
+    double initialDistance;
+    double speed;
+    double course;
+    std::vector<double> trueLofarFreqs;
+    double trueDemonFreq;
     double trueDepth;
 };
+
 struct BatchTargetFeature {
     int formalId;
     double calAngle;
     std::vector<double> calLofar;
-    std::vector<double> calLofarDcv; // [新增] 批处理聚合后的 DCV 累积线谱
+    std::vector<double> calLofarDcv;
     double calDemon;
 };
 
@@ -101,13 +99,12 @@ struct TargetTrack {
     std::vector<double> lineSpectra;
     double shaftFreq;
 
-    // [新增] 累积DCV线谱专属存储
     std::vector<double> lineSpectraDcv;
     QVector<double> lineSpectrumAmpDcv;
     QVector<double> accumulatedDcvSpectrum;
 
-    double estimatedDepth = -1.0;    // 默认 -1 表示未启用或未检测
-    QString targetClass = "未知";     // 默认未知
+    double estimatedDepth = -1.0;
+    QString targetClass = "未知";
     bool isSubmarine = false;
 };
 Q_DECLARE_METATYPE(TargetTrack)
@@ -139,20 +136,15 @@ struct OfflineTargetResult {
 };
 Q_DECLARE_METATYPE(QList<OfflineTargetResult>)
 
-// =========================================================
-// 【新增】：用于前端渲染 Dashboard 驾驶舱的结构化评估结果
-// =========================================================
 struct TargetEvaluation {
     int targetId;
     QString lineSpectraStr;
-    double accuracy; // 百分比正确率 (0~100)
+    double accuracy;
     double shaftFreq;
 
-    // [新增] 累积DCV专属评估结果
     QString lineSpectraStrDcv;
     double accuracyDcv = 0.0;
 
-    // [新增] 真实和解算方位历程跟踪
     bool hasTruth = false;
     double initialTrueAngle = 0.0;
     double currentTrueAngle = 0.0;
@@ -160,18 +152,15 @@ struct TargetEvaluation {
     double currentCalcAngle = 0.0;
 
     double estimatedDepth = -1.0;
-        QString targetClass = "未知";
+    QString targetClass = "未知";
 
-        // ===================================
-            // 【新增】：传给 Tab 4 专属 MFP 表格的字段
-            // ===================================
-            QString name = "";            // 目标真实名称
-            double trueDepth = -1.0;      // 真实深度
-            QString trueClass = "未知";   // 真实类别
-            bool isMfpCorrect = false;    // 判别是否正确
+    QString name = "";
+    double trueDepth = -1.0;
+    QString trueClass = "未知";
+    bool isMfpCorrect = false;
 
-            int mfpCorrectCount = 0; // 累计正确次数
-                int mfpTotalCount = 0;   // 累计评估次数
+    int mfpCorrectCount = 0;
+    int mfpTotalCount = 0;
 };
 Q_DECLARE_METATYPE(TargetEvaluation)
 
@@ -180,8 +169,8 @@ struct SystemEvaluationResult {
     double realtimeTimeSec;
     double batchTimeSec;
     int confirmedTargetCount;
-    // 【新增】：将当前的开启状态传递给前端
-        bool isMfpEnabled = false;
+    bool isMfpEnabled = false;
+    bool isFinal = false; // 标记是否为终极报告
     QList<TargetEvaluation> targetEvals;
 };
 Q_DECLARE_METATYPE(SystemEvaluationResult)

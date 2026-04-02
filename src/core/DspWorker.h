@@ -4,9 +4,9 @@
 #include <atomic>
 #include "DataTypes.h"
 #include "detect_line_spectrum_from_lofar_change.h"
-#include "MfpProcessor.h"
 #include <QMutex>
 #include <QMap>
+
 class DspWorker : public QThread {
     Q_OBJECT
 public:
@@ -40,11 +40,7 @@ private:
     std::atomic<bool> m_isRunning;
     std::atomic<bool> m_isPaused;
     std::vector<TargetTruth> m_groundTruths;
-    QMutex m_removeMutex;
-    QList<int> m_targetsToRemove;
     QStringList m_selectedFiles;
-
-    MfpProcessor m_mfpProcessor; // 【新增】MFP匹配场处理引擎
-    QMap<int, int> m_mfpCorrectCounts;
-        QMap<int, int> m_mfpTotalCounts;
+    QList<int> m_targetsToRemove;
+    QMutex m_removeMutex;
 };

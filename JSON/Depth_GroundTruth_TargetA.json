@@ -1,0 +1,18 @@
+{
+    "targets": [
+        {
+            "course": 45,
+            "id": 1,
+            "initialAngle": 90,
+            "initialDistance": 20000,
+            "name": "Target X",
+            "speed": 5,
+            "trueDemonFreq": 3.5,
+            "trueDepth": 50,
+            "trueLofarFreqs": [
+                120,
+                150
+            ]
+        }
+    ]
+}

@@ -225,28 +225,43 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent),
     m_worker(new DspWorker(this)),
     m_validator(new SelfValidator(this))
 {
+    // 【核心修复 1】：注册 Qt 元类型，防止列表数据在多线程信号传递时丢失或引发异常
     qRegisterMetaType<SystemEvaluationResult>("SystemEvaluationResult");
+    qRegisterMetaType<QList<TargetEvaluation>>("QList<TargetEvaluation>");
+
     setupUi();
 
+    // 绑定顶部控制栏按钮
     connect(m_btnSelectFiles, &QPushButton::clicked, this, &MainWindow::onSelectFilesClicked);
-    connect(m_btnManualTruth, &QPushButton::clicked, this, &MainWindow::onManualTruthClicked); // 【更新】
+    connect(m_btnManualTruth, &QPushButton::clicked, this, &MainWindow::onManualTruthClicked);
     connect(m_btnStart, &QPushButton::clicked, this, &MainWindow::onStartClicked);
     connect(m_btnPauseResume, &QPushButton::clicked, this, &MainWindow::onPauseResumeClicked);
     connect(m_btnStop, &QPushButton::clicked, this, &MainWindow::onStopClicked);
     connect(m_btnExport, &QPushButton::clicked, this, &MainWindow::onExportClicked);
 
-    // ... 其他 connect 保持不变 ...
+    // 绑定 DspWorker 工作线程发出的实时信号
     connect(m_worker, &DspWorker::frameProcessed, this, &MainWindow::onFrameProcessed, Qt::QueuedConnection);
     connect(m_worker, &DspWorker::logReady, this, &MainWindow::appendLog, Qt::QueuedConnection);
     connect(m_worker, &DspWorker::reportReady, this, &MainWindow::appendReport, Qt::QueuedConnection);
     connect(m_worker, &DspWorker::offlineResultsReady, this, &MainWindow::onOfflineResultsReady, Qt::QueuedConnection);
     connect(m_worker, &DspWorker::processingFinished, this, &MainWindow::onProcessingFinished, Qt::QueuedConnection);
 
+    // 绑定 DspWorker 的批处理特征提取完成信号 到 SelfValidator 进行判决
     connect(m_worker, &DspWorker::batchFinished, m_validator, &SelfValidator::onBatchFinished, Qt::QueuedConnection);
+
+    // 绑定 SelfValidator 的批次结果输出信号 到 主界面
     connect(m_validator, &SelfValidator::validationLogReady, this, &MainWindow::appendReport, Qt::QueuedConnection);
     connect(m_validator, &SelfValidator::batchAccuracyComputed, this, &MainWindow::onBatchAccuracyComputed, Qt::QueuedConnection);
+
+    // 绑定 DspWorker 的实时特征评估表 到 主界面 (用于刷新表一)
     connect(m_worker, &DspWorker::evaluationResultReady, this, &MainWindow::onEvaluationResultReady, Qt::QueuedConnection);
+
+    // =========================================================
+    // 【核心修复 2】：把验证器的判决结果和表二彻底绑定！
+    // =========================================================
+    connect(m_validator, &SelfValidator::mfpResultReady, this, &MainWindow::onMfpResultReady, Qt::QueuedConnection);
 }
+
 
 void MainWindow::onManualTruthClicked() {
     TruthInputDialog dialog(this);
@@ -1887,8 +1902,60 @@ QWidget* MainWindow::createCardWidget(QLabel* contentLabel, const QString& bgCol
 }
 
 
+void MainWindow::onMfpResultReady(const QList<TargetEvaluation>& mfpResults) {
+    disconnect(m_tableMfpResults, &QTableWidget::itemChanged, this, &MainWindow::onTargetNameChanged);
+    m_tableMfpResults->setRowCount(0);
+
+    for (int i = 0; i < mfpResults.size(); ++i) {
+        const auto& mfp = mfpResults[i];
+        m_latestMfpResults[mfp.targetId] = mfp;
+
+        // 【核心修复】：先执行累加逻辑，再进行 UI 渲染
+        // 这样可以确保当前这一批次的结果立即计入 n/m 统计
+        m_mfpTotalCounts[mfp.targetId]++;
+        if (mfp.isMfpCorrect) m_mfpCorrectCounts[mfp.targetId]++;
+
+        m_tableMfpResults->insertRow(i);
+        QString displayName = m_targetNames.value(mfp.targetId, QString("Target %1").arg(mfp.targetId));
+        auto* nameItem = new QTableWidgetItem(displayName);
+        nameItem->setData(Qt::UserRole, mfp.targetId);
+        nameItem->setFlags(Qt::ItemIsSelectable | Qt::ItemIsEditable | Qt::ItemIsEnabled);
+        m_tableMfpResults->setItem(i, 0, nameItem);
+
+        m_tableMfpResults->setItem(i, 1, new QTableWidgetItem(QString("%1 m").arg(mfp.estimatedDepth, 0, 'f', 1)));
+        m_tableMfpResults->setItem(i, 2, new QTableWidgetItem(QString("%1 m").arg(mfp.trueDepth, 0, 'f', 1)));
+
+        auto* trueClassItem = new QTableWidgetItem(mfp.trueClass);
+        if (mfp.trueClass == "水下潜艇") trueClassItem->setForeground(QBrush(QColor(41, 128, 185)));
+        else trueClassItem->setForeground(QBrush(QColor(142, 68, 173)));
+        m_tableMfpResults->setItem(i, 3, trueClassItem);
+
+        auto* sysClassItem = new QTableWidgetItem(mfp.targetClass);
+        if (mfp.targetClass == "水下潜艇") sysClassItem->setForeground(QBrush(QColor(41, 128, 185)));
+        else sysClassItem->setForeground(QBrush(QColor(142, 68, 173)));
+        m_tableMfpResults->setItem(i, 4, sysClassItem);
+
+        // 使用更新后的 m_mfpCorrectCounts 和 m_mfpTotalCounts 进行显示
+        QString resStr = mfp.isMfpCorrect ?
+            QString("✅ 正确 (%1/%2)").arg(m_mfpCorrectCounts[mfp.targetId]).arg(m_mfpTotalCounts[mfp.targetId]) :
+            QString("❌ 错误 (%1/%2)").arg(m_mfpCorrectCounts[mfp.targetId]).arg(m_mfpTotalCounts[mfp.targetId]);
+        QColor resColor = mfp.isMfpCorrect ? QColor(39, 174, 96) : Qt::red;
+
+        auto* resItem = new QTableWidgetItem(resStr);
+        resItem->setForeground(QBrush(resColor));
+        QFont f = resItem->font(); f.setBold(true); resItem->setFont(f);
+        m_tableMfpResults->setItem(i, 5, resItem);
+
+        for(int col = 0; col < 6; ++col) {
+            if(m_tableMfpResults->item(i, col)) m_tableMfpResults->item(i, col)->setTextAlignment(Qt::AlignCenter);
+        }
+    }
+    connect(m_tableMfpResults, &QTableWidget::itemChanged, this, &MainWindow::onTargetNameChanged);
+}
+
+
+
 void MainWindow::onEvaluationResultReady(const SystemEvaluationResult& res) {
-    // 1. 顶部全局统计信息更新
     m_lblStatTime->setText(QString("<span style='font-size:32px; color:#27ae60;'>%1</span>"
                                    "<span style='font-size:16px; color:#7f8c8d;'> s </span>"
                                    "<span style='font-size:14px; color:#7f8c8d;'>(实时 </span>"
@@ -1902,23 +1969,18 @@ void MainWindow::onEvaluationResultReady(const SystemEvaluationResult& res) {
 
     m_lblStatTargets->setText(QString("<span style='font-size:36px; color:#2980b9;'>%1</span> 艘").arg(res.confirmedTargetCount));
 
-    // 2. 表格清理与状态准备
     disconnect(m_tableTargetFeatures, &QTableWidget::itemChanged, this, &MainWindow::onTargetNameChanged);
-    disconnect(m_tableMfpResults, &QTableWidget::itemChanged, this, &MainWindow::onTargetNameChanged);
 
     m_tableTargetFeatures->setRowCount(0);
-    m_tableMfpResults->setRowCount(0);
-    m_tableMfpResults->setVisible(res.isMfpEnabled); // 动态控制 MFP 专属表的显示
+    m_tableMfpResults->setVisible(res.isMfpEnabled);
 
     double totalAccInstant = 0.0;
     double totalAccDcv = 0.0;
     int validAccCount = 0;
     bool anyHasTruth = false;
 
-    QVector<double> ticks;
+    QVector<double> ticks, accDataInst, accDataDcv;
     QVector<QString> labels;
-    QVector<double> accDataInst;
-    QVector<double> accDataDcv;
 
     static double lastTotalTime = -1.0;
     static int currentBatchIndex = 0;
@@ -1932,18 +1994,19 @@ void MainWindow::onEvaluationResultReady(const SystemEvaluationResult& res) {
         m_plotCalcAzimuth->clearGraphs();
         m_trueAzimuthGraphs.clear();
         m_calcAzimuthGraphs.clear();
+        m_tableMfpResults->setRowCount(0);
+        m_mfpCorrectCounts.clear();
+        m_mfpTotalCounts.clear();
+        m_latestMfpResults.clear();
     }
     currentBatchIndex++;
 
     QList<QColor> colorPalette = {QColor(41, 128, 185), QColor(39, 174, 96), QColor(211, 84, 0), QColor(142, 68, 173), QColor(192, 57, 43), QColor(22, 160, 133)};
 
-    // 3. 核心循环：同时填充表格与收集图表数据
     for (int i = 0; i < res.targetEvals.size(); ++i) {
         const auto& eval = res.targetEvals[i];
-
         QString displayName = m_targetNames.value(eval.targetId, QString("Target %1").arg(eval.targetId));
 
-        // ================== 填充表1：常规特征提取表 ==================
         m_tableTargetFeatures->insertRow(i);
 
         auto* nameItem = new QTableWidgetItem(displayName);
@@ -1951,40 +2014,28 @@ void MainWindow::onEvaluationResultReady(const SystemEvaluationResult& res) {
         nameItem->setFlags(Qt::ItemIsSelectable | Qt::ItemIsEditable | Qt::ItemIsEnabled);
         m_tableTargetFeatures->setItem(i, 0, nameItem);
 
-        auto* item1 = new QTableWidgetItem(eval.lineSpectraStr);
-        item1->setFlags(Qt::ItemIsSelectable | Qt::ItemIsEnabled);
-        m_tableTargetFeatures->setItem(i, 1, item1);
+        m_tableTargetFeatures->setItem(i, 1, new QTableWidgetItem(eval.lineSpectraStr));
 
         auto* itemAccInst = new QTableWidgetItem(QString("%1%").arg(eval.accuracy, 0, 'f', 1));
         itemAccInst->setForeground(eval.accuracy >= 60.0 ? QBrush(QColor(46, 204, 113)) : QBrush(Qt::red));
         itemAccInst->setFont(QFont("sans", 10, QFont::Bold));
-        itemAccInst->setFlags(Qt::ItemIsSelectable | Qt::ItemIsEnabled);
         m_tableTargetFeatures->setItem(i, 2, itemAccInst);
 
-        auto* item3 = new QTableWidgetItem(eval.lineSpectraStrDcv);
-        item3->setFlags(Qt::ItemIsSelectable | Qt::ItemIsEnabled);
-        m_tableTargetFeatures->setItem(i, 3, item3);
+        m_tableTargetFeatures->setItem(i, 3, new QTableWidgetItem(eval.lineSpectraStrDcv));
 
         auto* itemAccDcv = new QTableWidgetItem(QString("%1%").arg(eval.accuracyDcv, 0, 'f', 1));
         itemAccDcv->setForeground(eval.accuracyDcv >= 60.0 ? QBrush(QColor(46, 204, 113)) : QBrush(Qt::red));
         itemAccDcv->setFont(QFont("sans", 10, QFont::Bold));
-        itemAccDcv->setFlags(Qt::ItemIsSelectable | Qt::ItemIsEnabled);
         m_tableTargetFeatures->setItem(i, 4, itemAccDcv);
 
         QString shaftStr = eval.shaftFreq > 0 ? QString("%1 Hz").arg(eval.shaftFreq, 0, 'f', 1) : "未检测到";
-        auto* item5 = new QTableWidgetItem(shaftStr);
-        item5->setFlags(Qt::ItemIsSelectable | Qt::ItemIsEnabled);
-        m_tableTargetFeatures->setItem(i, 5, item5);
+        m_tableTargetFeatures->setItem(i, 5, new QTableWidgetItem(shaftStr));
 
         QString trueAngStr = eval.hasTruth ? QString("%1° -> %2°").arg(eval.initialTrueAngle, 0, 'f', 1).arg(eval.currentTrueAngle, 0, 'f', 1) : "--";
-        auto* item6 = new QTableWidgetItem(trueAngStr);
-        item6->setFlags(Qt::ItemIsSelectable | Qt::ItemIsEnabled);
-        m_tableTargetFeatures->setItem(i, 6, item6);
+        m_tableTargetFeatures->setItem(i, 6, new QTableWidgetItem(trueAngStr));
 
         QString calcAngStr = eval.initialCalcAngle >= 0 ? QString("%1° -> %2°").arg(eval.initialCalcAngle, 0, 'f', 1).arg(eval.currentCalcAngle, 0, 'f', 1) : "--";
-        auto* item7 = new QTableWidgetItem(calcAngStr);
-        item7->setFlags(Qt::ItemIsSelectable | Qt::ItemIsEnabled);
-        m_tableTargetFeatures->setItem(i, 7, item7);
+        m_tableTargetFeatures->setItem(i, 7, new QTableWidgetItem(calcAngStr));
 
         double bestAcc = std::max(eval.accuracy, eval.accuracyDcv);
         QString judge; QColor judgeColor;
@@ -1995,65 +2046,16 @@ void MainWindow::onEvaluationResultReady(const SystemEvaluationResult& res) {
         auto* itemJudge = new QTableWidgetItem(judge);
         itemJudge->setForeground(QBrush(judgeColor));
         QFont judgeFont = itemJudge->font(); judgeFont.setBold(true); itemJudge->setFont(judgeFont);
-        itemJudge->setFlags(Qt::ItemIsSelectable | Qt::ItemIsEnabled);
         m_tableTargetFeatures->setItem(i, 8, itemJudge);
 
         for(int col = 0; col < 9; ++col) {
-            if(m_tableTargetFeatures->item(i, col)) m_tableTargetFeatures->item(i, col)->setTextAlignment(Qt::AlignCenter);
-        }
-
-        // ================== 填充表2：MFP专属深度判别表 ==================
-        if (res.isMfpEnabled) {
-            m_tableMfpResults->insertRow(i);
-
-            auto* nameItem2 = new QTableWidgetItem(displayName);
-            nameItem2->setData(Qt::UserRole, eval.targetId);
-            nameItem2->setFlags(Qt::ItemIsSelectable | Qt::ItemIsEditable | Qt::ItemIsEnabled);
-            m_tableMfpResults->setItem(i, 0, nameItem2);
-
-            auto* itemDepthEst = new QTableWidgetItem(eval.estimatedDepth >= 0 ? QString("%1 m").arg(eval.estimatedDepth, 0, 'f', 1) : "--");
-            itemDepthEst->setFlags(Qt::ItemIsSelectable | Qt::ItemIsEnabled);
-            m_tableMfpResults->setItem(i, 1, itemDepthEst);
-
-            auto* itemDepthTrue = new QTableWidgetItem(eval.hasTruth && eval.trueDepth >= 0 ? QString("%1 m").arg(eval.trueDepth, 0, 'f', 1) : "--");
-            itemDepthTrue->setFlags(Qt::ItemIsSelectable | Qt::ItemIsEnabled);
-            m_tableMfpResults->setItem(i, 2, itemDepthTrue);
-
-            auto* trueClassItem = new QTableWidgetItem(eval.hasTruth && eval.trueDepth >= 0 ? eval.trueClass : "--");
-            if (eval.trueClass == "水下潜艇") trueClassItem->setForeground(QBrush(QColor(41, 128, 185)));
-            else if (eval.trueClass == "水面舰船") trueClassItem->setForeground(QBrush(QColor(142, 68, 173)));
-            trueClassItem->setFlags(Qt::ItemIsSelectable | Qt::ItemIsEnabled);
-            m_tableMfpResults->setItem(i, 3, trueClassItem);
-
-            auto* sysClassItem = new QTableWidgetItem(eval.targetClass);
-            if (eval.targetClass == "水下潜艇") sysClassItem->setForeground(QBrush(QColor(41, 128, 185)));
-            else if (eval.targetClass == "水面舰船") sysClassItem->setForeground(QBrush(QColor(142, 68, 173)));
-            sysClassItem->setFlags(Qt::ItemIsSelectable | Qt::ItemIsEnabled);
-            m_tableMfpResults->setItem(i, 4, sysClassItem);
-
-            QString resStr = "--"; QColor resColor = Qt::gray;
-                        if (eval.hasTruth && eval.trueDepth >= 0 && eval.estimatedDepth >= 0) {
-                            // 【修复问题二补充：在 UI 上显示历史累计识别率 n/m】
-                            if (eval.isMfpCorrect) {
-                                resStr = QString("✅ 正确 (%1/%2)").arg(eval.mfpCorrectCount).arg(eval.mfpTotalCount);
-                                resColor = QColor(39, 174, 96);
-                            } else {
-                                resStr = QString("❌ 错误 (%1/%2)").arg(eval.mfpCorrectCount).arg(eval.mfpTotalCount);
-                                resColor = Qt::red;
-                            }
-                        }
-                        auto* resItem = new QTableWidgetItem(resStr);
-            resItem->setForeground(QBrush(resColor));
-            QFont f = resItem->font(); f.setBold(true); resItem->setFont(f);
-            resItem->setFlags(Qt::ItemIsSelectable | Qt::ItemIsEnabled);
-            m_tableMfpResults->setItem(i, 5, resItem);
-
-            for(int col = 0; col < 6; ++col) {
-                if(m_tableMfpResults->item(i, col)) m_tableMfpResults->item(i, col)->setTextAlignment(Qt::AlignCenter);
+            if(m_tableTargetFeatures->item(i, col)) {
+                m_tableTargetFeatures->item(i, col)->setFlags(Qt::ItemIsSelectable | Qt::ItemIsEnabled);
+                m_tableTargetFeatures->item(i, col)->setTextAlignment(Qt::AlignCenter);
             }
         }
+        m_tableTargetFeatures->item(i, 0)->setFlags(Qt::ItemIsSelectable | Qt::ItemIsEditable | Qt::ItemIsEnabled);
 
-        // ================== 收集所有绘图数据 ==================
         totalAccInstant += eval.accuracy;
         totalAccDcv += eval.accuracyDcv;
         validAccCount++;
@@ -2072,7 +2074,6 @@ void MainWindow::onEvaluationResultReady(const SystemEvaluationResult& res) {
             gCalc->setPen(QPen(tColor, 2));
             gCalc->setScatterStyle(QCPScatterStyle(QCPScatterStyle::ssCircle, tColor, Qt::white, 6));
             m_calcAzimuthGraphs[eval.targetId] = gCalc;
-
             if (eval.initialCalcAngle >= 0) gCalc->addData(0, eval.initialCalcAngle);
 
             if (eval.hasTruth) {
@@ -2084,22 +2085,12 @@ void MainWindow::onEvaluationResultReady(const SystemEvaluationResult& res) {
                 gTrue->addData(0, eval.initialTrueAngle);
             }
         }
+        if (eval.currentCalcAngle >= 0) m_calcAzimuthGraphs[eval.targetId]->addData(currentBatchIndex, eval.currentCalcAngle);
+        if (eval.hasTruth && m_trueAzimuthGraphs.contains(eval.targetId)) m_trueAzimuthGraphs[eval.targetId]->addData(currentBatchIndex, eval.currentTrueAngle);
+    }
 
-        if (eval.currentCalcAngle >= 0) {
-            m_calcAzimuthGraphs[eval.targetId]->addData(currentBatchIndex, eval.currentCalcAngle);
-        }
-        if (eval.hasTruth && m_trueAzimuthGraphs.contains(eval.targetId)) {
-            m_trueAzimuthGraphs[eval.targetId]->addData(currentBatchIndex, eval.currentTrueAngle);
-        }
-    } // 结束循环
-
-    // 重新连接表格信号
     connect(m_tableTargetFeatures, &QTableWidget::itemChanged, this, &MainWindow::onTargetNameChanged);
-    connect(m_tableMfpResults, &QTableWidget::itemChanged, this, &MainWindow::onTargetNameChanged);
 
-    // ==========================================================
-    // 4. 刷新图表区域 (动态更新自适应坐标系)
-    // ==========================================================
     double trueMin = 360.0, trueMax = -360.0;
     bool hasTrueRange = false;
     for (auto graph : m_trueAzimuthGraphs) {
@@ -2125,7 +2116,6 @@ void MainWindow::onEvaluationResultReady(const SystemEvaluationResult& res) {
     m_plotCalcAzimuth->xAxis->setRange(0, currentBatchIndex + 1.5);
     m_plotCalcAzimuth->replot();
 
-    // 刷新准确率平均数值
     double avgAccInstant = validAccCount > 0 ? (totalAccInstant / validAccCount) : 0.0;
     double avgAccDcv = validAccCount > 0 ? (totalAccDcv / validAccCount) : 0.0;
     m_lblStatAvgAcc->setText(QString("<span style='font-size:22px; color:#7f8c8d;'>瞬时 </span>"
@@ -2134,7 +2124,6 @@ void MainWindow::onEvaluationResultReady(const SystemEvaluationResult& res) {
                                      "<span style='font-size:28px; color:#27ae60;'>%2%</span>")
                              .arg(avgAccInstant, 0, 'f', 1).arg(avgAccDcv, 0, 'f', 1));
 
-    // 刷新彩色柱状图
     QSharedPointer<QCPAxisTickerText> textTicker(new QCPAxisTickerText);
     textTicker->addTicks(ticks, labels);
     m_plotTargetAccuracy->xAxis->setTicker(textTicker);
@@ -2144,7 +2133,6 @@ void MainWindow::onEvaluationResultReady(const SystemEvaluationResult& res) {
     m_plotTargetAccuracy->xAxis->setRange(0, res.targetEvals.size() + 1);
     m_plotTargetAccuracy->replot();
 
-    // 刷新随时间推移的批次折线图
     m_plotBatchAccuracy->graph(0)->data()->clear();
     double maxBatchX = 0;
     for (int j = 0; j < m_batchAccuracies.size(); ++j) {
@@ -2154,7 +2142,61 @@ void MainWindow::onEvaluationResultReady(const SystemEvaluationResult& res) {
     if (maxBatchX == 0) maxBatchX = currentBatchIndex;
     m_plotBatchAccuracy->xAxis->setRange(0, maxBatchX + 1.5);
     m_plotBatchAccuracy->replot();
+
+    // ==========================================================
+    // 合并打印终极评估报告
+    // ==========================================================
+    if (res.isFinal) {
+        QString finalReport = "\n=================================================================================\n";
+        finalReport += "                               高 级 航 迹 管 理 终 极 评 估 报 告                               \n";
+        finalReport += "=================================================================================\n";
+        finalReport += "【系统级总体评价】\n";
+        finalReport += QString("  ▶ 全流程总计耗时: %1 秒 (实时解算: %2 秒 | 离线寻优: %3 秒)\n").arg(res.totalTimeSec, 0, 'f', 2).arg(res.realtimeTimeSec, 0, 'f', 2).arg(res.batchTimeSec, 0, 'f', 2);
+        finalReport += QString("  ▶ 稳定提取目标数: %1 个\n\n").arg(res.confirmedTargetCount);
+
+        if (res.isMfpEnabled) finalReport += "【最终目标水上/水下分辨与特征提取总结表】\n";
+        else finalReport += "【最终目标特征提取池总结表】\n";
+        finalReport += "---------------------------------------------------------------------------------\n";
+
+        int total_mfp = 0, correct_mfp = 0;
+        for (const auto& eval : res.targetEvals) {
+            QString displayName = m_targetNames.value(eval.targetId, QString("Target %1").arg(eval.targetId));
+            finalReport += QString("[%1]\n").arg(displayName);
+
+            // 【移除末尾的Hz】：因为 eval.lineSpectraStr 里自带 "124.7Hz(20/20)"
+            finalReport += QString("  - 瞬时线谱: %1 (准度: %2%) | DCV线谱: %3 (准度: %4%)\n")
+                        .arg(eval.lineSpectraStr).arg(eval.accuracy, 0, 'f', 1)
+                        .arg(eval.lineSpectraStrDcv).arg(eval.accuracyDcv, 0, 'f', 1);
+
+            QString shaftStr = eval.shaftFreq > 0 ? QString("%1 Hz").arg(eval.shaftFreq, 0, 'f', 1) : "-";
+            QString angStr = eval.currentCalcAngle >= 0 ? QString("%1° -> %2°").arg(eval.initialCalcAngle, 0, 'f', 1).arg(eval.currentCalcAngle, 0, 'f', 1) : "-";
+            finalReport += QString("  - 稳定轴频: %1 | 方位历程: %2\n").arg(shaftStr).arg(angStr);
+
+            if (res.isMfpEnabled && m_latestMfpResults.contains(eval.targetId)) {
+                auto mfp = m_latestMfpResults[eval.targetId];
+                QString depthStr = mfp.estimatedDepth >= 0 ? QString("%1 m").arg(mfp.estimatedDepth, 0, 'f', 1) : "-";
+                QString judgeStr = mfp.isMfpCorrect ? "✅ 判别正确" : "❌ 判别错误";
+                if (mfp.trueDepth >= 0) { total_mfp++; if (mfp.isMfpCorrect) correct_mfp++; }
+                finalReport += QString("  - 估计深度: %1 | 物理类别: %2 | 判别结果: %3\n").arg(depthStr, -8).arg(mfp.targetClass, -8).arg(judgeStr);
+            } else if (!res.isMfpEnabled) {
+                double bestAcc = std::max(eval.accuracy, eval.accuracyDcv);
+                QString judge = (bestAcc >= 80.0) ? "高可信" : (bestAcc >= 60.0 ? "可信" : "弱特征");
+                finalReport += QString("  - 综合判定: %1 (置信度得分: %2)\n").arg(judge).arg(bestAcc, 0, 'f', 1);
+            }
+            finalReport += "---------------------------------------------------------------------------------\n";
+        }
+        if (res.isMfpEnabled && total_mfp > 0) {
+            double global_acc = (double)correct_mfp / total_mfp * 100.0;
+            finalReport += QString("【最终验收结论】全局 MFP 水上/水下判别正确率: %1%\n").arg(global_acc, 0, 'f', 2);
+            finalReport += "=================================================================================\n\n";
+        }
+
+        appendReport(finalReport);
+    }
 }
+
+
+
 void MainWindow::onTargetNameChanged(QTableWidgetItem* item) {
     if (!item || item->column() != 0) return; // 只关心第一列（目标名称列）
 
@@ -2186,4 +2228,8 @@ void MainWindow::onDepthResolveToggled(bool checked) {
         appendLog("⛔ 已关闭 MFP 深度分辨功能。");
     }
 }
+
+
+
+
 #include "MainWindow.moc"

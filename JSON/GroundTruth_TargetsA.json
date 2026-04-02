@@ -1,0 +1,17 @@
+{
+    "targets": [
+        {
+            "course": 45,
+            "id": 1,
+            "initialAngle": 60,
+            "initialDistance": 20000,
+            "name": "Ship A (潜艇1)",
+            "speed": 4,
+            "trueDemonFreq": 2.1,
+            "trueDepth": 50,
+            "trueLofarFreqs": [
+                125
+            ]
+        }
+    ]
+}

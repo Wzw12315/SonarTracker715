@@ -63,6 +63,7 @@ private slots:
     void onPlotDoubleClick(QMouseEvent *event);
     void onTargetNameChanged(QTableWidgetItem* item); // 【意见三】监听目标改名
     void onDepthResolveToggled(bool checked);
+    void onMfpResultReady(const QList<TargetEvaluation>& mfpResults); // 【新增】
 private:
     void setupUi();
     void setupPlotInteraction(QCustomPlot* plot);
@@ -179,4 +180,8 @@ private:
 
     QCheckBox* m_chkDepthResolve;
     QString m_krakenRawPath; // 存储选择的 raw 文件路径
+
+    QMap<int, int> m_mfpCorrectCounts;   // 【新增】：长期统计正确次数
+        QMap<int, int> m_mfpTotalCounts;     // 【新增】：长期统计总次数
+        QMap<int, TargetEvaluation> m_latestMfpResults; // 【新增】：缓存最新深度用于生成终极报告
 };
