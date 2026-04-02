@@ -22,7 +22,8 @@
 #include <QSpinBox>
 #include "../core/DataBuffer.h"
 #include "../core/UdpReceiver.h"
-
+#include "NotificationWidget.h" // 引入新部件
+#include <QUdpSocket> // 记得包含头文件
 
 struct PlotLayoutInfo {
     QWidget* originalParent = nullptr;
@@ -45,6 +46,9 @@ public:
     ~MainWindow();
 protected:
     bool eventFilter(QObject *obj, QEvent *event) override;
+    void resizeEvent(QResizeEvent* event) override; // 【新增】：监听窗口拉伸，保持通知位置
+
+
 private slots:
     void onSelectFilesClicked();
     void onManualTruthClicked(); // 【修改】：替换了原来的 onLoadTruthClicked
@@ -67,8 +71,14 @@ private slots:
     void onTargetNameChanged(QTableWidgetItem* item); // 【意见三】监听目标改名
     void onDepthResolveToggled(bool checked);
     void onMfpResultReady(const QList<TargetEvaluation>& mfpResults); // 【新增】
+
+    void onUdpConfigClicked(); // 【新增】打开配置面板的槽函数
 private:
     void setupUi();
+
+    void setupNotificationArea(); // 【新增】：初始化浮动通知区域
+    void showNotification(const QString& title, const QString& message); // 【新增】：触发通知的接口
+
     void setupPlotInteraction(QCustomPlot* plot);
     void popOutPlot(QCustomPlot* plot);
     void restorePlot(QWidget* popupWindow);
@@ -175,7 +185,11 @@ private:
 
     QStringList m_selectedFiles;         // 【意见一】保存多选的文件路径
     QLineEdit* m_editTaskName;           // 【意见六】任务名称修改框
-    QLabel* m_lblNewTargetAlarm;         // 【意见四】新目标指示灯
+//    QLabel* m_lblNewTargetAlarm;         // 【意见四】新目标指示灯
+    // 【新增】：浮动通知区域的容器与布局
+        QWidget* m_notificationContainer = nullptr;
+        QVBoxLayout* m_notificationLayout = nullptr;
+
     QWidget* m_targetLightsWidget;       // 【意见二】常亮指示灯容器
     QHBoxLayout* m_targetLightsLayout;   // 【意见二】常亮指示灯布局
     QMap<int, QLabel*> m_targetLights;   // 【意见二】记录每个目标对应的指示灯
@@ -185,10 +199,19 @@ private:
     QString m_krakenRawPath; // 存储选择的 raw 文件路径
 
     QMap<int, int> m_mfpCorrectCounts;   // 【新增】：长期统计正确次数
-        QMap<int, int> m_mfpTotalCounts;     // 【新增】：长期统计总次数
-        QMap<int, TargetEvaluation> m_latestMfpResults; // 【新增】：缓存最新深度用于生成终极报告
+    QMap<int, int> m_mfpTotalCounts;     // 【新增】：长期统计总次数
+    QMap<int, TargetEvaluation> m_latestMfpResults; // 【新增】：缓存最新深度用于生成终极报告
 
-        DataBuffer* m_dataBuffer = nullptr;
-        QCheckBox* m_chkUdpMode; // <--- Add this line here
-        UdpReceiver* m_udpReceiver = nullptr;
+    DataBuffer* m_dataBuffer = nullptr;
+    QCheckBox* m_chkUdpMode; // <--- Add this line here
+    UdpReceiver* m_udpReceiver = nullptr;
+
+    QPushButton* m_btnUdpConfig;
+        QString m_udpBindAddress = "0.0.0.0"; // 默认监听所有网卡
+        quint16 m_udpListenPort = 8888;       // 默认端口
+
+        // 【新增】用于向发射端发送控制命令的参数
+            QString m_udpRemoteAddress = "127.0.0.1";
+            quint16 m_udpRemotePort = 8889;
+            QUdpSocket* m_cmdSocket = nullptr; // 命令发送套接字
 };

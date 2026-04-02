@@ -18,17 +18,18 @@ struct PacketHeader {
 };
 #pragma pack(pop)
 // ==========================================
-
 class UdpReceiver : public QThread {
     Q_OBJECT
 public:
-    UdpReceiver(quint16 port, DataBuffer* buffer, const QString& savePath, QObject* parent = nullptr);
+    // 【修改】：新增 const QString& address 参数
+    UdpReceiver(const QString& address, quint16 port, DataBuffer* buffer, const QString& savePath, QObject* parent = nullptr);
     void stop();
 
 protected:
     void run() override;
 
 private:
+    QString m_address; // 【新增】绑定的IP地址
     quint16 m_port;
     DataBuffer* m_buffer;
     QString m_savePath;

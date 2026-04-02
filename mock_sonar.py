@@ -4,29 +4,33 @@ import time
 import os
 import glob
 import re
-import numpy as np  # 必须引入 numpy 用于多目标信号矩阵相加
+import numpy as np
+import threading
 
-UDP_IP = "127.0.0.1"
-UDP_PORT = 8888
+# ==================== 配置区 ====================
+UDP_IP = "127.0.0.1"  # C++ 数据接收端的 IP
+UDP_PORT = 8888  # C++ 数据接收端的端口
 CHUNK_SIZE = 51200
 MAGIC_WORD = 0xAA55AA55
 
-# 【修改1：指向父文件夹】
-parent_folder = "/home/wzw/SonarTracker715/DATA/ship_DATA_snap600"
+LISTEN_IP = "0.0.0.0"  # 本机监听命令的 IP
+LISTEN_PORT = 8889  # 本机监听命令的端口 (C++发指令到这里)
 
-# 【修改2：递归搜索父文件夹下的所有 .raw 文件】
-# recursive=True 会自动钻进 shipA_raw_files, shipB_raw_files 等所有子目录去找
+# 全局控制标志
+is_running = False
+is_paused = False
+should_exit = False
+# ===============================================
+
+parent_folder = "/home/wzw/SonarTracker715/DATA/ship_DATA_snap600"
 raw_files = glob.glob(os.path.join(parent_folder, "**/*.raw"), recursive=True)
 
 if not raw_files:
     print("❌ 未找到任何 raw 文件，请检查路径。")
     exit()
 
-# 【修改3：利用正则提取时间戳，将同一个时间的多个目标文件分到同一组】
 time_to_files = {}
-# 匹配 _0s.raw, _3.5s.raw 等格式，提取前面的数字
 time_pattern = re.compile(r'_(\d+(?:\.\d+)?)s\.raw$')
-
 for fpath in raw_files:
     match = time_pattern.search(fpath)
     if match:
@@ -35,48 +39,87 @@ for fpath in raw_files:
             time_to_files[time_val] = []
         time_to_files[time_val].append(fpath)
 
-# 按时间先后顺序排序帧 (0s, 3s, 6s ...)
 sorted_times = sorted(time_to_files.keys())
 
+
+# ==================== 控制指令监听线程 ====================
+def command_listener():
+    global is_running, is_paused, should_exit
+    listen_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    listen_sock.bind((LISTEN_IP, LISTEN_PORT))
+    print(f"🎧 [控制端] 正在后台监听控制指令 (端口: {LISTEN_PORT})...")
+
+    while not should_exit:
+        try:
+            data, addr = listen_sock.recvfrom(1024)
+            cmd = data.decode('utf-8').strip()
+            print(f"📩 [总控台] 收到远端指令: {cmd}")
+
+            if cmd == "CMD:START":
+                is_running = True
+                is_paused = False
+            elif cmd == "CMD:PAUSE":
+                is_paused = True
+            elif cmd == "CMD:RESUME":
+                is_paused = False
+            elif cmd == "CMD:STOP":
+                is_running = False
+        except:
+            pass
+
+
+threading.Thread(target=command_listener, daemon=True).start()
+
+# ==================== 数据发送主循环 ====================
 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 1024 * 1024 * 32)
 
 try:
-    for frame_idx, t_val in enumerate(sorted_times, start=1):
-        files_for_this_frame = time_to_files[t_val]
-        print(f"▶ 正在发送 第 {frame_idx} 帧 (对应时间: {t_val}s)")
-        print(f"  [本帧包含 {len(files_for_this_frame)} 个目标信号源进行声学混合]")
+    print("\n⏳ 引擎就绪！等待 C++ 总控台下发 [开始] 指令...")
+    while not should_exit:
+        if not is_running:
+            time.sleep(0.5)
+            continue
 
-        summed_data = None
+        for frame_idx, t_val in enumerate(sorted_times, start=1):
+            if not is_running or should_exit:
+                print("🛑 收到中止指令，停止当前发送序列。")
+                break
 
-        # 【修改4：将本帧所有目标的数据读取出来并物理叠加】
-        for file_path in files_for_this_frame:
-            print(f"    - 加载: {os.path.basename(file_path)}")
-            # 按 32位单精度浮点数 读取二进制文件（与你的 RawReader 完全一致！）
-            file_arr = np.fromfile(file_path, dtype=np.float32)
+            # 暂停逻辑：阻塞卡住，不退出发送循环
+            while is_paused and not should_exit and is_running:
+                time.sleep(0.1)
 
-            if summed_data is None:
-                summed_data = file_arr.copy()
-            else:
-                summed_data += file_arr  # 矩阵相加，模拟声音在水下的物理叠加
+            if not is_running: break
 
-        # 将叠加后的浮点数数组转回二进制字节流
-        frame_bytes = summed_data.tobytes()
+            files_for_this_frame = time_to_files[t_val]
+            print(f"▶ 正在发送 第 {frame_idx} 帧 (对应时间: {t_val}s)")
+            summed_data = None
 
-        # 将这帧混合后的巨型数据切片发送
-        chunks = [frame_bytes[i:i + CHUNK_SIZE] for i in range(0, len(frame_bytes), CHUNK_SIZE)]
-        total_chunks = len(chunks)
+            for file_path in files_for_this_frame:
+                file_arr = np.fromfile(file_path, dtype=np.float32)
+                if summed_data is None:
+                    summed_data = file_arr.copy()
+                else:
+                    summed_data += file_arr
 
-        for chunk_idx, chunk in enumerate(chunks):
-            header = struct.pack('<IIIII', MAGIC_WORD, frame_idx, chunk_idx, total_chunks, len(chunk))
-            sock.sendto(header + chunk, (UDP_IP, UDP_PORT))
-            time.sleep(0.002)
+            frame_bytes = summed_data.tobytes()
+            chunks = [frame_bytes[i:i + CHUNK_SIZE] for i in range(0, len(frame_bytes), CHUNK_SIZE)]
+            total_chunks = len(chunks)
 
-        print(f"  └─ 📦 第 {frame_idx} 帧混合发送完毕 (共 {total_chunks} 个分片)")
-        time.sleep(1)
+            for chunk_idx, chunk in enumerate(chunks):
+                header = struct.pack('<IIIII', MAGIC_WORD, frame_idx, chunk_idx, total_chunks, len(chunk))
+                sock.sendto(header + chunk, (UDP_IP, UDP_PORT))
+                time.sleep(0.002)
 
-    print("\n🎉 所有多目标混合帧发送完毕！")
+            # time.sleep(1)
+
+        if is_running:
+            print("\n🎉 当前所有数据帧发送完毕！等待下一轮指令...")
+            is_running = False
+
 except KeyboardInterrupt:
-    print("\n🛑 已终止。")
+    print("\n🛑 手动关闭。")
+    should_exit = True
 finally:
     sock.close()

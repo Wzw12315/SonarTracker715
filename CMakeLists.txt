@@ -54,8 +54,7 @@ set(SOURCES
     src/core/detect_line_spectrum_from_lofar_change.cpp
     src/core/fir2.h
     src/core/fir2.cpp
-    3rdparty/qcustomplot/qcustomplot.cpp
-    3rdparty/qcustomplot/qcustomplot.h
+
     src/core/SelfValidator.h
     src/core/SelfValidator.cpp
 
@@ -65,6 +64,11 @@ set(SOURCES
     src/core/UdpReceiver.h
     src/core/UdpReceiver.cpp
     src/core/DataBuffer.h
+
+    src/ui/NotificationWidget.h
+    src/ui/NotificationWidget.cpp
+    3rdparty/qcustomplot/qcustomplot.cpp
+    3rdparty/qcustomplot/qcustomplot.h
 )
 
 add_executable(${PROJECT_NAME} ${SOURCES})

@@ -1,9 +1,11 @@
 #include "UdpReceiver.h"
+#include <QHostAddress> // 【新增】包含IP地址处理头文件
 #include <QDebug>
 
-UdpReceiver::UdpReceiver(quint16 port, DataBuffer* buffer, const QString& savePath, QObject* parent)
-    : QThread(parent), m_port(port), m_buffer(buffer), m_savePath(savePath), m_isRunning(false) {}
-
+// 【修改】：更新构造函数，初始化 m_address
+UdpReceiver::UdpReceiver(const QString& address, quint16 port, DataBuffer* buffer, const QString& savePath, QObject* parent)
+    : QThread(parent), m_address(address), m_port(port), m_buffer(buffer), m_savePath(savePath), m_isRunning(false) {
+}
 void UdpReceiver::stop() {
     m_isRunning = false;
 }
@@ -12,8 +14,13 @@ void UdpReceiver::run() {
     m_isRunning = true;
     QUdpSocket socket;
 
-    // 绑定端口，并扩大接收缓冲区 (32MB) 以防高并发丢包
-    socket.bind(QHostAddress::Any, m_port, QUdpSocket::ShareAddress);
+    // 【修改】：根据传入的 IP 决定绑定策略
+    QHostAddress bindAddr = (m_address == "0.0.0.0" || m_address.toLower() == "any")
+                            ? QHostAddress::Any
+                            : QHostAddress(m_address);
+
+    // 绑定具体的 IP 和 端口
+    socket.bind(bindAddr, m_port, QUdpSocket::ShareAddress);
     socket.setSocketOption(QAbstractSocket::ReceiveBufferSizeSocketOption, 1024 * 1024 * 32);
 
     // ================== 【修改这里的逻辑】 ==================

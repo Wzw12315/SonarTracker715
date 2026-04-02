@@ -25,6 +25,58 @@
 #include <QInputDialog> // 确保顶部包含此头文件
 #include <QTimer> // 确保顶部包含此头文件
 
+
+// ==================== UDP 网络配置窗口类 ====================
+class UdpConfigDialog : public QDialog {
+    Q_OBJECT
+public:
+    explicit UdpConfigDialog(const QString& locIp, quint16 locPort,
+                             const QString& remIp, quint16 remPort, QWidget *parent = nullptr) : QDialog(parent) {
+        setWindowTitle("⚙️ UDP 网络双向通信配置");
+        resize(400, 240);
+        QVBoxLayout* layout = new QVBoxLayout(this);
+
+        QGroupBox* grpLocal = new QGroupBox("📡 本地数据接收 (侦听)");
+        QFormLayout* formLocal = new QFormLayout(grpLocal);
+        editLocIp = new QLineEdit(locIp, this);
+        editLocPort = new QLineEdit(QString::number(locPort), this);
+        formLocal->addRow("本地绑定 IP:", editLocIp);
+        formLocal->addRow("接收数据端口:", editLocPort);
+
+        QGroupBox* grpRemote = new QGroupBox("🕹️ 远端阵列控制 (发送指令)");
+        QFormLayout* formRemote = new QFormLayout(grpRemote);
+        editRemIp = new QLineEdit(remIp, this);
+        editRemPort = new QLineEdit(QString::number(remPort), this);
+        formRemote->addRow("目标发射端 IP:", editRemIp);
+        formRemote->addRow("目标命令端口:", editRemPort);
+
+        layout->addWidget(grpLocal);
+        layout->addWidget(grpRemote);
+
+        QHBoxLayout* btns = new QHBoxLayout();
+        QPushButton* btnOk = new QPushButton("应用配置", this);
+        QPushButton* btnCancel = new QPushButton("取消", this);
+        btnOk->setStyleSheet("background-color: #3498db; color: white; font-weight: bold;");
+        btns->addStretch();
+        btns->addWidget(btnOk);
+        btns->addWidget(btnCancel);
+        layout->addLayout(btns);
+
+        connect(btnOk, &QPushButton::clicked, this, &QDialog::accept);
+        connect(btnCancel, &QPushButton::clicked, this, &QDialog::reject);
+    }
+
+    QString getLocIp() const { return editLocIp->text().trimmed(); }
+    quint16 getLocPort() const { return editLocPort->text().toUShort(); }
+    QString getRemIp() const { return editRemIp->text().trimmed(); }
+    quint16 getRemPort() const { return editRemPort->text().toUShort(); }
+
+private:
+    QLineEdit* editLocIp; QLineEdit* editLocPort;
+    QLineEdit* editRemIp; QLineEdit* editRemPort;
+};
+
+
 // ==================== 独立真值配置与导入窗口类 ====================
 class TruthInputDialog : public QDialog {
     Q_OBJECT
@@ -675,64 +727,83 @@ void MainWindow::onStartClicked() {
     m_validator->setDepthResolveEnabled(m_currentConfig.enableDepthResolve);
 
     if (truths.empty()) {
-        m_lblModeIndicator->setText("🔴 实战盲测模式 (无先验真值)");
-        m_lblModeIndicator->setStyleSheet("background-color: #fdeaea; color: #e74c3c; font-size: 14px; font-weight: bold; border: 1px solid #e74c3c; border-radius: 5px; padding: 6px;");
-        m_logConsole->appendPlainText("[系统提示] 未加载先验真值数据，系统进入【实战盲测模式】。Tab4正确率将显示为特征稳定度。\n");
-    } else {
-        m_lblModeIndicator->setText(QString("🟢 算法仿真评估模式 (真值:%1个)").arg(truths.size()));
-        m_lblModeIndicator->setStyleSheet("background-color: #eafaf1; color: #27ae60; font-size: 14px; font-weight: bold; border: 1px solid #27ae60; border-radius: 5px; padding: 6px;");
-        m_logConsole->appendPlainText(QString("[系统提示] 已加载 %1 个先验真值目标，系统进入【算法仿真评估模式】。\n").arg(truths.size()));
-    }
+            m_lblModeIndicator->setText("🔴 实战盲测模式 (无先验真值)");
+            m_lblModeIndicator->setStyleSheet("background-color: #fdeaea; color: #e74c3c; font-size: 14px; font-weight: bold; border: 1px solid #e74c3c; border-radius: 5px; padding: 6px;");
+            m_logConsole->appendPlainText("[系统提示] 未加载先验真值数据，系统进入【实战盲测模式】。Tab4正确率将显示为特征稳定度。\n");
+
+            // 【新增】：盲测模式下直接隐藏这两个没有意义的真值图表
+            m_plotTrueAzimuth->setVisible(false);
+            m_plotBatchAccuracy->setVisible(false);
+        } else {
+            m_lblModeIndicator->setText(QString("🟢 算法仿真评估模式 (真值:%1个)").arg(truths.size()));
+            m_lblModeIndicator->setStyleSheet("background-color: #eafaf1; color: #27ae60; font-size: 14px; font-weight: bold; border: 1px solid #27ae60; border-radius: 5px; padding: 6px;");
+            m_logConsole->appendPlainText(QString("[系统提示] 已加载 %1 个先验真值目标，系统进入【算法仿真评估模式】。\n").arg(truths.size()));
+
+            // 【新增】：仿真模式下恢复显示
+            m_plotTrueAzimuth->setVisible(true);
+            m_plotBatchAccuracy->setVisible(true);
+        }
 
     // =======================================================
-    // 【全新逻辑】：根据模式启动对应的数据引擎
-    // =======================================================
-    if (m_chkUdpMode->isChecked()) {
-        if (!m_dataBuffer) m_dataBuffer = new DataBuffer(100);
-        m_dataBuffer->clear();
+        // 【全新逻辑】：根据模式启动对应的数据引擎
+        // =======================================================
 
-        // 默认监听端口 8888。如果需要用户配置，可以在界面上加个端口输入框
-        if (!m_udpReceiver) m_udpReceiver = new UdpReceiver(8888, m_dataBuffer, "");
-        m_udpReceiver->start();
+        // 确保启动前线程是干净的
+        if (m_worker->isRunning()) {
+            m_worker->stop();
+            m_worker->wait();
+        }
 
-        m_worker->setWorkMode(WorkMode::MODE_UDP);
-        m_worker->setDataBuffer(m_dataBuffer);
-        appendLog("\n>> [系统模式] 🚀 已切换为 UDP 实时侦听模式，监听端口: 8888\n");
-    } else {
-        m_worker->setWorkMode(WorkMode::MODE_FILE);
-        m_worker->setDataBuffer(nullptr);
-        appendLog("\n>> [系统模式] 📂 已切换为离线文件回放模式\n");
+        if (m_chkUdpMode->isChecked()) {
+            // ----------------- UDP 实时模式 -----------------
+            if (!m_dataBuffer) m_dataBuffer = new DataBuffer(100);
+            m_dataBuffer->clear();
+
+            // 清理并重启底层 UDP 监听器，应用最新的 IP 和端口配置
+            if (m_udpReceiver) {
+                m_udpReceiver->stop();
+                m_udpReceiver->wait();
+                m_udpReceiver->deleteLater();
+                m_udpReceiver = nullptr;
+            }
+
+            m_udpReceiver = new UdpReceiver(m_udpBindAddress, m_udpListenPort, m_dataBuffer, "");
+            m_udpReceiver->start();
+
+            m_worker->setWorkMode(WorkMode::MODE_UDP);
+            m_worker->setDataBuffer(m_dataBuffer);
+
+            appendLog(QString("\n>> [系统模式] 🚀 已切换为 UDP 实时侦听模式，监听地址: %1:%2\n").arg(m_udpBindAddress).arg(m_udpListenPort));
+        } else {
+            // ----------------- 本地文件回放模式 -----------------
+            m_worker->setWorkMode(WorkMode::MODE_FILE);
+            appendLog("\n>> [系统模式] 📂 已切换为离线文件回放模式\n");
+        }
+
+        // 真正启动核心算法线程
+        m_worker->start();
+        // 【新增】：如果是 UDP 模式，向远端下发开始投递数据的指令
+            if (m_chkUdpMode->isChecked() && m_cmdSocket) {
+                QByteArray cmd = "CMD:START";
+                m_cmdSocket->writeDatagram(cmd, QHostAddress(m_udpRemoteAddress), m_udpRemotePort);
+                appendLog(QString(">> 📡 已向阵列远端发送 [START] 开始投递指令！\n"));
+            }
     }
-
-    m_worker->start();
-}
 
 void MainWindow::onStopClicked() {
-    // 【新增】：如果开着 UDP 接收器，也要把它关掉
-    if (m_udpReceiver && m_udpReceiver->isRunning()) {
-        m_udpReceiver->stop();
-        m_udpReceiver->wait();
-        appendLog(">> 网络数据接收引擎已停止。\n");
-    }
+    m_worker->stop();
+    m_btnStart->setEnabled(true); m_btnPauseResume->setEnabled(false); m_btnStop->setEnabled(false);
+    m_btnSelectFiles->setEnabled(!m_chkUdpMode->isChecked());
+    m_chkUdpMode->setEnabled(true);
+    m_lblSysInfo->setText("状态: 已手动终止");
+    appendLog("\n>> 操作已被用户手动终止。");
 
-    if (m_worker->isRunning()) {
-        m_worker->stop();
-
-        QString currentText = m_lblSysInfo->text();
-        currentText.replace("状态: 运行中", "状态: 已手动终止");
-        currentText.replace("状态: 已挂起 (暂停)", "状态: 已手动终止");
-        if (!currentText.contains("结束时间") && !currentText.contains("终止时间")) {
-            currentText += QString("\n终止时间: %1").arg(QDateTime::currentDateTime().toString("HH:mm:ss"));
-        }
-        m_lblSysInfo->setText(currentText);
-
-        appendLog("\n>> 接收到终止指令...\n");
-        m_btnStart->setEnabled(true); m_btnSelectFiles->setEnabled(true); m_btnManualTruth->setEnabled(true);
-        m_chkUdpMode->setEnabled(true); // 恢复 UDP 模式切换的点击
-        m_btnPauseResume->setEnabled(false); m_btnStop->setEnabled(false);
+    // 【新增向远端发指令】
+    if (m_chkUdpMode->isChecked() && m_cmdSocket) {
+        m_cmdSocket->writeDatagram("CMD:STOP", QHostAddress(m_udpRemoteAddress), m_udpRemotePort);
+        appendLog(">> 📡 已向阵列远端发送 [STOP] 停止投递指令！\n");
     }
 }
-
 void MainWindow::setupUi() {
     QWidget* centralWidget = new QWidget(this);
     QVBoxLayout* mainVLayout = new QVBoxLayout(centralWidget);
@@ -758,8 +829,23 @@ void MainWindow::setupUi() {
     QVBoxLayout* btnLayout = new QVBoxLayout(groupButtons);
 
     // 【新增】：UDP 实时侦听模式开关
-    m_chkUdpMode = new QCheckBox("开启 UDP 实时水听器直连模式", this);
-    m_chkUdpMode->setStyleSheet("QCheckBox { color: #8e44ad; font-weight: bold; }");
+    m_chkUdpMode = new QCheckBox("开启 UDP 实时接收", this);
+        m_chkUdpMode->setStyleSheet("QCheckBox { color: #8e44ad; font-weight: bold; }");
+        // 在 setupUi 某处初始化发送套接字
+            m_cmdSocket = new QUdpSocket(this);
+        // 【新增】网络配置按钮
+        m_btnUdpConfig = new QPushButton("⚙️ 网络配置", this);
+        m_btnUdpConfig->setToolTip("修改监听IP和端口");
+        m_btnUdpConfig->setStyleSheet("QPushButton { font-weight: bold; color: #2980b9; padding: 2px 8px; }");
+        connect(m_btnUdpConfig, &QPushButton::clicked, this, &MainWindow::onUdpConfigClicked);
+
+        QHBoxLayout* udpLayout = new QHBoxLayout();
+        udpLayout->addWidget(m_chkUdpMode);
+        udpLayout->addStretch();
+        udpLayout->addWidget(m_btnUdpConfig);
+
+        // 把原来的 btnLayout->addWidget(m_chkUdpMode); 替换成：
+        btnLayout->addLayout(udpLayout);
 
     m_btnSelectFiles = new QPushButton(" 数据文件输入...", this);
     m_btnSelectFiles->setIcon(style()->standardIcon(QStyle::SP_DirOpenIcon));
@@ -778,23 +864,17 @@ void MainWindow::setupUi() {
     connect(m_chkDepthResolve, &QCheckBox::toggled, this, &MainWindow::onDepthResolveToggled);
     m_chkDepthResolve->setChecked(false);
 
-    // 【关联】：当勾选UDP时，禁用文件选择按钮
-        connect(m_chkUdpMode, &QCheckBox::toggled, this, [this](bool checked){
-            m_btnSelectFiles->setEnabled(!checked);
-            // 【新增】：如果是 UDP 模式，直接启用开始按钮
-            if (checked) {
-                m_btnStart->setEnabled(true);
-            } else {
-                // 切回文件模式时，只有当已经选择了文件才启用开始按钮
-                m_btnStart->setEnabled(!m_selectedFiles.isEmpty());
-            }
+    // 2. 找到原来的 m_chkUdpMode toggled (大概在 392 行)，把文本换成动态变量：
+    connect(m_chkUdpMode, &QCheckBox::toggled, this, [this](bool checked){
+        m_btnSelectFiles->setEnabled(!checked);
+        m_btnStart->setEnabled(checked || !m_selectedFiles.isEmpty());
 
-            if (checked) {
-                m_lblSysInfo->setText("状态: 就绪\n模式: UDP网络直连\n待接收数据...");
-            } else {
-                m_lblSysInfo->setText("状态: 就绪\n模式: 离线文件回放\n待导入数据...");
-            }
-        });
+        if (checked) {
+            m_lblSysInfo->setText(QString("状态: 就绪\n模式: UDP网络直连\n监听: %1:%2").arg(m_udpBindAddress).arg(m_udpListenPort));
+        } else {
+            m_lblSysInfo->setText("状态: 就绪\n模式: 离线文件回放\n待导入数据...");
+        }
+    });
 
     m_editDeleteTargetId = new QLineEdit(this);
     m_editDeleteTargetId->setPlaceholderText("要剔除的目标ID...");
@@ -815,7 +895,7 @@ void MainWindow::setupUi() {
     btnLayout->addWidget(m_editTaskName);
 
     // 把 UDP 开关加到按钮区最上方
-    btnLayout->addWidget(m_chkUdpMode);
+//    btnLayout->addWidget(m_chkUdpMode);
 
     btnLayout->addWidget(m_btnSelectFiles); btnLayout->addWidget(m_btnManualTruth);
     btnLayout->addWidget(m_btnStart); btnLayout->addWidget(m_btnPauseResume);
@@ -930,20 +1010,31 @@ void MainWindow::setupUi() {
     QGroupBox* groupLog = new QGroupBox("系统状态与终端", rightSidePanel);
     QVBoxLayout* logLayout = new QVBoxLayout(groupLog);
 
-    m_lblModeIndicator = new QLabel("⚪ 当前模式: 待就绪", this);
-    m_lblModeIndicator->setAlignment(Qt::AlignCenter);
-    m_lblModeIndicator->setStyleSheet("background-color: #ecf0f1; color: #7f8c8d; font-size: 14px; font-weight: bold; border: 1px solid #bdc3c7; border-radius: 5px; padding: 6px;");
+    // 1. 模式指示器 (放在最上面)
+        m_lblModeIndicator = new QLabel("⚪ 当前模式: 待就绪", this);
+        m_lblModeIndicator->setAlignment(Qt::AlignCenter);
+        m_lblModeIndicator->setStyleSheet("background-color: #ecf0f1; color: #7f8c8d; font-size: 14px; font-weight: bold; border: 1px solid #bdc3c7; border-radius: 5px; padding: 6px;");
+        logLayout->addWidget(m_lblModeIndicator);
 
-    m_targetLightsWidget = new QWidget(this);
-    m_targetLightsLayout = new QHBoxLayout(m_targetLightsWidget);
-    m_targetLightsLayout->setContentsMargins(0, 0, 0, 0);
-    m_targetLightsLayout->setAlignment(Qt::AlignLeft);
+        // 2. 指示灯展示区 (放在模式指示器下方，装在一个固定高度且带背景的 QScrollArea 里)
+        QScrollArea* lightsScrollArea = new QScrollArea(this);
+        lightsScrollArea->setFixedHeight(45); // 固定高度，刚好容纳一排指示灯
+        lightsScrollArea->setWidgetResizable(true);
+        lightsScrollArea->setFrameShape(QFrame::Box); // 去掉难看的深色边框
+        lightsScrollArea->setStyleSheet("QScrollArea { background-color: transparent; }");
 
-    QHBoxLayout* indicatorLayout = new QHBoxLayout();
-    indicatorLayout->addWidget(m_lblModeIndicator);
-    indicatorLayout->addWidget(m_targetLightsWidget);
-    indicatorLayout->addStretch();
-    logLayout->addLayout(indicatorLayout);
+        // 真正的指示灯容器 Widget
+        m_targetLightsWidget = new QWidget(lightsScrollArea);
+        m_targetLightsWidget->setStyleSheet("background-color: #fcfcfc; border: 1px solid #e0e0e0; border-radius: 4px;");
+
+        // 指示灯水平排列
+        m_targetLightsLayout = new QHBoxLayout(m_targetLightsWidget);
+        m_targetLightsLayout->setContentsMargins(5, 0, 5, 0); // 留点内边距
+        m_targetLightsLayout->setSpacing(5);
+        m_targetLightsLayout->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+
+        lightsScrollArea->setWidget(m_targetLightsWidget);
+        logLayout->addWidget(lightsScrollArea);
 
     m_lblSysInfo = new QLabel("引擎初始化完成，参数已就绪。\n等待注入探测数据...");
     m_lblSysInfo->setStyleSheet("color: #333333; font-weight: bold;");
@@ -1227,6 +1318,8 @@ void MainWindow::setupUi() {
     setCentralWidget(centralWidget);
     resize(1600, 1000);
     setWindowTitle("SonarTracker");
+    // 【新增】：在 UI 初始化最后，挂载浮动通知层
+        setupNotificationArea();
 }
 
 
@@ -1304,15 +1397,28 @@ void MainWindow::onSelectFilesClicked() {
 }
 
 void MainWindow::onPauseResumeClicked() {
-    if (m_worker->isRunning()) {
-        if (m_worker->isPaused()) {
-            m_worker->resume(); m_lblSysInfo->setText("状态: 运行中 (恢复)"); appendLog("\n>> 系统恢复处理...\n");
-        } else {
-            m_worker->pause(); m_lblSysInfo->setText("状态: 已挂起 (暂停)"); appendLog("\n>> 系统已暂停处理...\n");
+    if (m_worker->isPaused()) {
+        m_worker->resume();
+        m_lblSysInfo->setText(QString("状态: 运行中\n任务: %1\n开始时间: %2").arg(m_editTaskName->text()).arg(QDateTime::currentDateTime().toString("HH:mm:ss")));
+        appendLog("\n>> 算法已继续执行。");
+
+        // 【新增向远端发指令】
+        if (m_chkUdpMode->isChecked() && m_cmdSocket) {
+            m_cmdSocket->writeDatagram("CMD:RESUME", QHostAddress(m_udpRemoteAddress), m_udpRemotePort);
+            appendLog(">> 📡 已向阵列远端发送 [RESUME] 恢复投递指令！\n");
+        }
+    } else {
+        m_worker->pause();
+        m_lblSysInfo->setText("状态: 已挂起 (暂停)");
+        appendLog("\n>> 算法已挂起暂停。");
+
+        // 【新增向远端发指令】
+        if (m_chkUdpMode->isChecked() && m_cmdSocket) {
+            m_cmdSocket->writeDatagram("CMD:PAUSE", QHostAddress(m_udpRemoteAddress), m_udpRemotePort);
+            appendLog(">> 📡 已向阵列远端发送 [PAUSE] 暂停投递指令！\n");
         }
     }
 }
-
 
 void MainWindow::onExportClicked() {
     if (m_reportConsole->toPlainText().isEmpty() && m_logConsole->toPlainText().isEmpty()) {
@@ -1468,6 +1574,11 @@ void MainWindow::createTargetPlots(int targetId) {
     m_lsPlots.insert(targetId, lsPlot); m_lofarPlots.insert(targetId, lofarPlot); m_demonPlots.insert(targetId, demonPlot);
     int col = targetId - 1;
     m_targetLayout->addWidget(lsPlot, 0, col); m_targetLayout->addWidget(lofarPlot, 1, col); m_targetLayout->addWidget(demonPlot, 2, col);
+//    // 【优化逻辑】：目标编号决定行 (row)，图表类型固定为 3 列 (0, 1, 2)
+//        int row = targetId - 1; // 每个目标独占一行
+//        m_targetLayout->addWidget(lsPlot, row, 0);   // 第0列：瞬时线谱
+//        m_targetLayout->addWidget(lofarPlot, row, 1); // 第1列：LOFAR谱
+//        m_targetLayout->addWidget(demonPlot, row, 2); // 第2列：DEMON谱
 }
 
 
@@ -1494,29 +1605,47 @@ void MainWindow::onFrameProcessed(const FrameResult& result) {
     updatePlotOriginalRange(m_timeAzimuthPlot);
 
     for (const TargetTrack& t : result.tracks) {
-        // 【意见二】：目标指示灯常亮逻辑 (只对转正目标生成)
-        if (t.isConfirmed) {
-            if (!m_targetLights.contains(t.id)) {
-                QLabel* light = new QLabel(this);
-                light->setAlignment(Qt::AlignCenter);
-                m_targetLightsLayout->addWidget(light);
-                m_targetLights.insert(t.id, light);
+            // 【意见二】：目标指示灯常亮逻辑 (只对转正目标生成)
+            if (t.isConfirmed) {
+                QString displayName = m_targetNames.value(t.id, QString("T%1").arg(t.id));
+
+                if (!m_targetLights.contains(t.id)) {
+                    QLabel* light = new QLabel(this);
+                    light->setAlignment(Qt::AlignCenter);
+                    m_targetLightsLayout->addWidget(light);
+                    m_targetLights.insert(t.id, light);
+
+                    // ========================================================
+                    // 【新增】：当发现系统之前没有这个目标的指示灯时，说明是新锁定的目标
+                    // 此时触发右上角的浮动 Toast 通知！
+                    // ========================================================
+                    QString notifyMsg = QString("系统自动跟踪算法已锁定新目标：\n● 名称: %1\n● 方位: %2°")
+                                        .arg(displayName)
+                                        .arg(t.currentAngle, 0, 'f', 1);
+
+                    // 提取最强的一根线谱作为特征展示（如果有的话）
+                    if (!t.lineSpectra.empty()) {
+                        notifyMsg += QString("\n● 特征: %1 Hz").arg(t.lineSpectra.front(), 0, 'f', 1);
+                    }
+
+                    showNotification("🎯 发现并锁定新目标", notifyMsg);
+                    // ========================================================
+                }
+
+                QLabel* light = m_targetLights[t.id];
+
+                if (t.isActive) {
+                    light->setText(QString("🟢 %1").arg(displayName));
+                    light->setStyleSheet("background-color: #eafaf1; color: #27ae60; font-size: 13px; font-weight: bold; border: 1px solid #27ae60; border-radius: 4px; padding: 3px 6px; margin-right: 2px;");
+                } else {
+                    light->setText(QString("⚪ %1 (熄灭)").arg(displayName));
+                    light->setStyleSheet("background-color: #f0f0f0; color: #7f8c8d; font-size: 13px; font-weight: bold; border: 1px solid #bdc3c7; border-radius: 4px; padding: 3px 6px; margin-right: 2px;");
+                }
             }
 
-            QLabel* light = m_targetLights[t.id];
-            QString displayName = m_targetNames.value(t.id, QString("T%1").arg(t.id));
-
-            if (t.isActive) {
-                light->setText(QString("🟢 %1").arg(displayName));
-                light->setStyleSheet("background-color: #eafaf1; color: #27ae60; font-size: 13px; font-weight: bold; border: 1px solid #27ae60; border-radius: 4px; padding: 3px 6px; margin-right: 2px;");
-            } else {
-                light->setText(QString("⚪ %1 (熄灭)").arg(displayName));
-                light->setStyleSheet("background-color: #f0f0f0; color: #7f8c8d; font-size: 13px; font-weight: bold; border: 1px solid #bdc3c7; border-radius: 4px; padding: 3px 6px; margin-right: 2px;");
-            }
-        }
-
-        if (!m_lofarPlots.contains(t.id)) createTargetPlots(t.id);
-
+            // ... 后面的画图逻辑保持完全不变 ...
+            if (!m_lofarPlots.contains(t.id)) createTargetPlots(t.id);
+            // ...
         QCustomPlot* lsp = m_lsPlots[t.id]; QCustomPlot* lp = m_lofarPlots[t.id]; QCustomPlot* dp = m_demonPlots[t.id];
         QString statusStr = t.isActive ? "[跟踪中]" : "[已熄火]";
         QColor lsColor = t.isActive ? Qt::red : Qt::darkGray; QColor lofarColor = t.isActive ? Qt::blue : Qt::darkGray; QColor demonColor = t.isActive ? Qt::darkGreen : Qt::darkGray;
@@ -2146,12 +2275,18 @@ void MainWindow::onEvaluationResultReady(const SystemEvaluationResult& res) {
     if (hasCalcRange) m_plotCalcAzimuth->yAxis->setRange(calcMin - 5.0, calcMax + 5.0);
     else m_plotCalcAzimuth->yAxis->setRange(0, 180);
 
-    m_plotTrueAzimuth->setVisible(anyHasTruth);
-    m_plotTrueAzimuth->xAxis->setRange(0, currentBatchIndex + 1.5);
-    m_plotTrueAzimuth->replot();
+    // 找到这一行代码：
+        m_plotTrueAzimuth->setVisible(anyHasTruth);
+        m_plotTrueAzimuth->xAxis->setRange(0, currentBatchIndex + 1.5);
+        m_plotTrueAzimuth->replot();
 
-    m_plotCalcAzimuth->xAxis->setRange(0, currentBatchIndex + 1.5);
-    m_plotCalcAzimuth->replot();
+        m_plotCalcAzimuth->xAxis->setRange(0, currentBatchIndex + 1.5);
+        m_plotCalcAzimuth->replot();
+
+        // =====================================
+        // 【新增下面这一行代码】：让批次正确率图表也跟随有无真值来决定是否显示
+        m_plotBatchAccuracy->setVisible(anyHasTruth);
+        // =====================================
 
     double avgAccInstant = validAccCount > 0 ? (totalAccInstant / validAccCount) : 0.0;
     double avgAccDcv = validAccCount > 0 ? (totalAccDcv / validAccCount) : 0.0;
@@ -2277,7 +2412,82 @@ void MainWindow::onDepthResolveToggled(bool checked) {
     }
 }
 
+void MainWindow::setupNotificationArea() {
+    // 将 MainWindow 设为父对象，使其悬浮在所有其他控件之上
+    m_notificationContainer = new QWidget(this);
+    // 【核心修复】：让这个容器完全忽略鼠标事件，允许鼠标穿透点击下方的滚动条
+        m_notificationContainer->setAttribute(Qt::WA_TransparentForMouseEvents);
+    // 容器背景设为全透明，只显示内部的卡片
+    m_notificationContainer->setStyleSheet("background: transparent;");
 
+    // 使用垂直布局，从上往下堆叠通知卡片
+    m_notificationLayout = new QVBoxLayout(m_notificationContainer);
+    m_notificationLayout->setContentsMargins(0, 0, 0, 0);
+    m_notificationLayout->setSpacing(10);
+    m_notificationLayout->addStretch(); // 底部加入弹簧，让通知紧贴顶部排列
 
+    // 提升容器的层级，确保不被图表遮挡
+    m_notificationContainer->raise();
+}
+void MainWindow::resizeEvent(QResizeEvent* event) {
+    QMainWindow::resizeEvent(event);
+
+    if (m_notificationContainer) {
+        // 动态计算右上角位置
+        // 宽度固定 320，高度占满窗口（留出顶部边距），靠右侧 20px
+        int containerWidth = 320;
+        int paddingRight = 20;
+        int paddingTop = 60; // 避开最顶部的工具栏
+
+        m_notificationContainer->setGeometry(
+            this->width() - containerWidth - paddingRight,
+            paddingTop,
+            containerWidth,
+            this->height() - paddingTop
+        );
+    }
+}
+void MainWindow::showNotification(const QString& title, const QString& message) {
+    // 1. 同步将通知内容格式化，并永久写入右侧/底部的终端日志中！
+    // 这样哪怕卡片消失了，你也可以在日志里随时翻看。
+    QString logText = QString("\n[%1]\n%2").arg(title).arg(message);
+    appendLog(logText);
+
+    // 2. 正常的右上角弹窗逻辑
+    if (!m_notificationContainer) return;
+
+    NotificationWidget* toast = new NotificationWidget(title, message, m_notificationContainer);
+    m_notificationLayout->insertWidget(0, toast);
+
+    toast->raise();
+    m_notificationContainer->raise();
+
+    QTimer::singleShot(6000, toast, [toast](){
+        if (toast) {
+            emit toast->closed();
+            toast->deleteLater();
+        }
+    });
+}
+
+// 1. 新增弹窗处理逻辑
+void MainWindow::onUdpConfigClicked() {
+    UdpConfigDialog dlg(m_udpBindAddress, m_udpListenPort, m_udpRemoteAddress, m_udpRemotePort, this);
+    if (dlg.exec() == QDialog::Accepted) {
+        m_udpBindAddress = dlg.getLocIp();
+        m_udpListenPort = dlg.getLocPort();
+        m_udpRemoteAddress = dlg.getRemIp();
+        m_udpRemotePort = dlg.getRemPort();
+
+        appendLog(QString(">> [网络配置] 更新完成 | 监听: %1:%2 | 发令向: %3:%4\n")
+                  .arg(m_udpBindAddress).arg(m_udpListenPort)
+                  .arg(m_udpRemoteAddress).arg(m_udpRemotePort));
+
+        if (m_chkUdpMode->isChecked()) {
+            m_lblSysInfo->setText(QString("状态: 就绪\n模式: UDP网络直连\n侦听:%1\n控端:%2")
+                                  .arg(m_udpListenPort).arg(m_udpRemoteAddress));
+        }
+    }
+}
 
 #include "MainWindow.moc"
