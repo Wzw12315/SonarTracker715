@@ -1,5 +1,6 @@
 find . -type f -name "*:Zone.Identifier" -delete
-
+git config --global --unset http.proxy
+git config --global --unset https.proxy
 git status
 
 cd ~/SonarTracker715

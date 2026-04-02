@@ -272,137 +272,6 @@ void MainWindow::onManualTruthClicked() {
     }
 }
 
-void MainWindow::onStartClicked() {
-    if (m_selectedFiles.isEmpty()) {
-        QMessageBox::warning(this, "提示", "请先导入数据文件！");
-        return;
-    }
-
-    m_currentConfig.fs = m_editFs->text().toDouble();
-    m_currentConfig.M = m_editM->text().toInt();
-    m_currentConfig.d = m_editD->text().toDouble();
-    m_currentConfig.c = m_editC->text().toDouble();
-    m_currentConfig.r_scan = m_editRScan->text().toDouble();
-    m_currentConfig.timeStep = m_editTimeStep->text().toDouble();
-    m_currentConfig.batchSize = m_editBatchSize->text().toInt();
-    m_currentConfig.lofarMin = m_editLofarMin->text().toDouble();
-    m_currentConfig.lofarMax = m_editLofarMax->text().toDouble();
-    m_currentConfig.demonMin = m_editDemonMin->text().toDouble();
-    m_currentConfig.demonMax = m_editDemonMax->text().toDouble();
-    m_currentConfig.nfftR = m_editNfftR->text().toInt();
-    m_currentConfig.nfftWin = m_editNfftWin->text().toInt();
-    m_currentConfig.azDetBgMult = m_editAzDetBgMult->text().toDouble();
-    m_currentConfig.azDetSidelobeRatio = m_editAzDetSidelobeRatio->text().toDouble();
-    m_currentConfig.azDetPeakMinDist = m_editAzDetPeakMinDist->text().toInt();
-
-    m_currentConfig.lofarBgMedWindow = m_editLofarBgMedWindow->text().toInt();
-    m_currentConfig.lofarSnrThreshMult = m_editLofarSnrThreshMult->text().toDouble();
-    m_currentConfig.lofarPeakMinDist = m_editLofarPeakMinDist->text().toInt();
-    m_currentConfig.dcvLofarBgMedWindow = m_editDcvLofarBgMedWindow->text().toInt();
-    m_currentConfig.dcvLofarSnrThreshMult = m_editDcvLofarSnrThreshMult->text().toDouble();
-    m_currentConfig.dcvLofarPeakMinDist = m_editDcvLofarPeakMinDist->text().toInt();
-
-    m_currentConfig.firOrder = m_editFirOrder->text().toInt();
-    m_currentConfig.firCutoff = m_editFirCutoff->text().toDouble();
-    m_currentConfig.tpswG = m_editTpswG->text().toDouble();
-    m_currentConfig.tpswE = m_editTpswE->text().toDouble();
-    m_currentConfig.tpswC = m_editTpswC->text().toDouble();
-    m_currentConfig.dpL = m_editDpL->text().toInt();
-    m_currentConfig.dpAlpha = m_editDpAlpha->text().toDouble();
-    m_currentConfig.dpBeta = m_editDpBeta->text().toDouble();
-    m_currentConfig.dpGamma = m_editDpGamma->text().toDouble();
-    m_currentConfig.dcvRlIter = m_editDcvRlIter->text().toInt();
-    m_currentConfig.trackAssocGate = m_editTrackAssocGate->text().toDouble();
-    m_currentConfig.trackMHits = m_editTrackMHits->text().toInt();
-    m_currentConfig.enableDepthResolve = m_chkDepthResolve->isChecked();
-    m_currentConfig.krakenRawPath = m_krakenRawPath;
-    m_btnStart->setEnabled(false); m_btnSelectFiles->setEnabled(false); m_btnManualTruth->setEnabled(false);
-    m_btnPauseResume->setEnabled(true); m_btnStop->setEnabled(true);
-    m_mainTabWidget->setCurrentIndex(0);
-    m_lblSysInfo->setText(QString("状态: 运行中\n任务: %1\n开始时间: %2").arg(m_editTaskName->text()).arg(QDateTime::currentDateTime().toString("HH:mm:ss")));
-
-    m_historyResults.clear();
-    m_batchAccuracies.clear();
-    m_targetClasses.clear();
-
-    // 【意见二】：清空界面上所有常亮目标指示灯
-    for (auto* light : m_targetLights.values()) {
-        m_targetLightsLayout->removeWidget(light);
-        light->deleteLater();
-    }
-    m_targetLights.clear();
-
-    m_timeAzimuthPlot->graph(0)->data()->clear();
-    m_plotBatchAccuracy->graph(0)->data()->clear();
-    m_plotBatchAccuracy->replot();
-
-    m_reportConsole->clear();
-    m_logConsole->clear();
-
-    QLayoutItem* item;
-    while ((item = m_targetLayout->takeAt(0)) != nullptr) {
-        if (item->widget()) delete item->widget();
-        delete item;
-    }
-    m_lsPlots.clear(); m_lofarPlots.clear(); m_demonPlots.clear();
-
-    if (m_cbfWaterfallPlot) { m_cbfWaterfallPlot->clearPlottables(); m_cbfWaterfallPlot->replot(); }
-    if (m_dcvWaterfallPlot) { m_dcvWaterfallPlot->clearPlottables(); m_dcvWaterfallPlot->replot(); }
-
-    closePopupsFromLayout(m_sliceLayout);
-    if (m_sliceLayout) {
-        while ((item = m_sliceLayout->takeAt(0)) != nullptr) {
-            if (item->widget()) delete item->widget();
-            delete item;
-        }
-    }
-
-    closePopupsFromLayout(m_lofarWaterfallLayout);
-    while ((item = m_lofarWaterfallLayout->takeAt(0)) != nullptr) {
-        if (item->widget()) delete item->widget();
-        delete item;
-    }
-
-    m_worker->setTargetFiles(m_selectedFiles);
-    m_worker->setConfig(m_currentConfig);
-
-    const std::vector<TargetTruth>& truths = m_validator->getTruthData();
-    m_worker->setGroundTruths(truths);
-    // =======================================================
-    // 【新增这行代码】：把是否开启深度分辨的状态同步给验证器
-    m_validator->setDepthResolveEnabled(m_currentConfig.enableDepthResolve);
-    // =======================================================
-    if (truths.empty()) {
-        m_lblModeIndicator->setText("🔴 实战盲测模式 (无先验真值)");
-        m_lblModeIndicator->setStyleSheet("background-color: #fdeaea; color: #e74c3c; font-size: 14px; font-weight: bold; border: 1px solid #e74c3c; border-radius: 5px; padding: 6px;");
-        m_logConsole->appendPlainText("[系统提示] 未加载先验真值数据，系统进入【实战盲测模式】。Tab4正确率将显示为特征稳定度。\n");
-    } else {
-        m_lblModeIndicator->setText(QString("🟢 算法仿真评估模式 (真值:%1个)").arg(truths.size()));
-        m_lblModeIndicator->setStyleSheet("background-color: #eafaf1; color: #27ae60; font-size: 14px; font-weight: bold; border: 1px solid #27ae60; border-radius: 5px; padding: 6px;");
-        m_logConsole->appendPlainText(QString("[系统提示] 已加载 %1 个先验真值目标，系统进入【算法仿真评估模式】。\n").arg(truths.size()));
-    }
-
-    m_worker->start();
-}
-
-void MainWindow::onStopClicked() {
-    if (m_worker->isRunning()) {
-        m_worker->stop();
-
-        // 【意见三】：增加终止时间显示
-        QString currentText = m_lblSysInfo->text();
-        currentText.replace("状态: 运行中", "状态: 已手动终止");
-        currentText.replace("状态: 已挂起 (暂停)", "状态: 已手动终止");
-        if (!currentText.contains("结束时间") && !currentText.contains("终止时间")) {
-            currentText += QString("\n终止时间: %1").arg(QDateTime::currentDateTime().toString("HH:mm:ss"));
-        }
-        m_lblSysInfo->setText(currentText);
-
-        appendLog("\n>> 接收到终止指令...\n");
-        m_btnStart->setEnabled(true); m_btnSelectFiles->setEnabled(true); m_btnManualTruth->setEnabled(true);
-        m_btnPauseResume->setEnabled(false); m_btnStop->setEnabled(false);
-    }
-}
 
 void MainWindow::onProcessingFinished() {
     // 【意见三】：增加分析完成时间显示
@@ -705,7 +574,165 @@ void MainWindow::onDeleteTargetClicked() {
     m_editDeleteTargetId->clear();
 }
 
-// 【修改函数】：替换原有的 setupUi() 完整代码（由于字数较长，主要在左侧控件面板增加剔除假目标的文本框与按钮布局）
+void MainWindow::onStartClicked() {
+    // 【修改】：如果不是 UDP 模式，才需要检查文件是否为空
+    if (!m_chkUdpMode->isChecked() && m_selectedFiles.isEmpty()) {
+        QMessageBox::warning(this, "提示", "请先导入数据文件！");
+        return;
+    }
+
+    m_currentConfig.fs = m_editFs->text().toDouble();
+    m_currentConfig.M = m_editM->text().toInt();
+    m_currentConfig.d = m_editD->text().toDouble();
+    m_currentConfig.c = m_editC->text().toDouble();
+    m_currentConfig.r_scan = m_editRScan->text().toDouble();
+    m_currentConfig.timeStep = m_editTimeStep->text().toDouble();
+    m_currentConfig.batchSize = m_editBatchSize->text().toInt();
+    m_currentConfig.lofarMin = m_editLofarMin->text().toDouble();
+    m_currentConfig.lofarMax = m_editLofarMax->text().toDouble();
+    m_currentConfig.demonMin = m_editDemonMin->text().toDouble();
+    m_currentConfig.demonMax = m_editDemonMax->text().toDouble();
+    m_currentConfig.nfftR = m_editNfftR->text().toInt();
+    m_currentConfig.nfftWin = m_editNfftWin->text().toInt();
+    m_currentConfig.azDetBgMult = m_editAzDetBgMult->text().toDouble();
+    m_currentConfig.azDetSidelobeRatio = m_editAzDetSidelobeRatio->text().toDouble();
+    m_currentConfig.azDetPeakMinDist = m_editAzDetPeakMinDist->text().toInt();
+
+    m_currentConfig.lofarBgMedWindow = m_editLofarBgMedWindow->text().toInt();
+    m_currentConfig.lofarSnrThreshMult = m_editLofarSnrThreshMult->text().toDouble();
+    m_currentConfig.lofarPeakMinDist = m_editLofarPeakMinDist->text().toInt();
+    m_currentConfig.dcvLofarBgMedWindow = m_editDcvLofarBgMedWindow->text().toInt();
+    m_currentConfig.dcvLofarSnrThreshMult = m_editDcvLofarSnrThreshMult->text().toDouble();
+    m_currentConfig.dcvLofarPeakMinDist = m_editDcvLofarPeakMinDist->text().toInt();
+
+    m_currentConfig.firOrder = m_editFirOrder->text().toInt();
+    m_currentConfig.firCutoff = m_editFirCutoff->text().toDouble();
+    m_currentConfig.tpswG = m_editTpswG->text().toDouble();
+    m_currentConfig.tpswE = m_editTpswE->text().toDouble();
+    m_currentConfig.tpswC = m_editTpswC->text().toDouble();
+    m_currentConfig.dpL = m_editDpL->text().toInt();
+    m_currentConfig.dpAlpha = m_editDpAlpha->text().toDouble();
+    m_currentConfig.dpBeta = m_editDpBeta->text().toDouble();
+    m_currentConfig.dpGamma = m_editDpGamma->text().toDouble();
+    m_currentConfig.dcvRlIter = m_editDcvRlIter->text().toInt();
+    m_currentConfig.trackAssocGate = m_editTrackAssocGate->text().toDouble();
+    m_currentConfig.trackMHits = m_editTrackMHits->text().toInt();
+    m_currentConfig.enableDepthResolve = m_chkDepthResolve->isChecked();
+    m_currentConfig.krakenRawPath = m_krakenRawPath;
+
+    m_btnStart->setEnabled(false); m_btnSelectFiles->setEnabled(false); m_btnManualTruth->setEnabled(false);
+    m_chkUdpMode->setEnabled(false); // 运行时禁止切换模式
+    m_btnPauseResume->setEnabled(true); m_btnStop->setEnabled(true);
+    m_mainTabWidget->setCurrentIndex(0);
+    m_lblSysInfo->setText(QString("状态: 运行中\n任务: %1\n开始时间: %2").arg(m_editTaskName->text()).arg(QDateTime::currentDateTime().toString("HH:mm:ss")));
+
+    m_historyResults.clear();
+    m_batchAccuracies.clear();
+    m_targetClasses.clear();
+
+    for (auto* light : m_targetLights.values()) {
+        m_targetLightsLayout->removeWidget(light);
+        light->deleteLater();
+    }
+    m_targetLights.clear();
+
+    m_timeAzimuthPlot->graph(0)->data()->clear();
+    m_plotBatchAccuracy->graph(0)->data()->clear();
+    m_plotBatchAccuracy->replot();
+
+    m_reportConsole->clear();
+    m_logConsole->clear();
+
+    QLayoutItem* item;
+    while ((item = m_targetLayout->takeAt(0)) != nullptr) {
+        if (item->widget()) delete item->widget();
+        delete item;
+    }
+    m_lsPlots.clear(); m_lofarPlots.clear(); m_demonPlots.clear();
+
+    if (m_cbfWaterfallPlot) { m_cbfWaterfallPlot->clearPlottables(); m_cbfWaterfallPlot->replot(); }
+    if (m_dcvWaterfallPlot) { m_dcvWaterfallPlot->clearPlottables(); m_dcvWaterfallPlot->replot(); }
+
+    closePopupsFromLayout(m_sliceLayout);
+    if (m_sliceLayout) {
+        while ((item = m_sliceLayout->takeAt(0)) != nullptr) {
+            if (item->widget()) delete item->widget();
+            delete item;
+        }
+    }
+
+    closePopupsFromLayout(m_lofarWaterfallLayout);
+    while ((item = m_lofarWaterfallLayout->takeAt(0)) != nullptr) {
+        if (item->widget()) delete item->widget();
+        delete item;
+    }
+
+    m_worker->setTargetFiles(m_selectedFiles);
+    m_worker->setConfig(m_currentConfig);
+
+    const std::vector<TargetTruth>& truths = m_validator->getTruthData();
+    m_worker->setGroundTruths(truths);
+    m_validator->setDepthResolveEnabled(m_currentConfig.enableDepthResolve);
+
+    if (truths.empty()) {
+        m_lblModeIndicator->setText("🔴 实战盲测模式 (无先验真值)");
+        m_lblModeIndicator->setStyleSheet("background-color: #fdeaea; color: #e74c3c; font-size: 14px; font-weight: bold; border: 1px solid #e74c3c; border-radius: 5px; padding: 6px;");
+        m_logConsole->appendPlainText("[系统提示] 未加载先验真值数据，系统进入【实战盲测模式】。Tab4正确率将显示为特征稳定度。\n");
+    } else {
+        m_lblModeIndicator->setText(QString("🟢 算法仿真评估模式 (真值:%1个)").arg(truths.size()));
+        m_lblModeIndicator->setStyleSheet("background-color: #eafaf1; color: #27ae60; font-size: 14px; font-weight: bold; border: 1px solid #27ae60; border-radius: 5px; padding: 6px;");
+        m_logConsole->appendPlainText(QString("[系统提示] 已加载 %1 个先验真值目标，系统进入【算法仿真评估模式】。\n").arg(truths.size()));
+    }
+
+    // =======================================================
+    // 【全新逻辑】：根据模式启动对应的数据引擎
+    // =======================================================
+    if (m_chkUdpMode->isChecked()) {
+        if (!m_dataBuffer) m_dataBuffer = new DataBuffer(100);
+        m_dataBuffer->clear();
+
+        // 默认监听端口 8888。如果需要用户配置，可以在界面上加个端口输入框
+        if (!m_udpReceiver) m_udpReceiver = new UdpReceiver(8888, m_dataBuffer, "");
+        m_udpReceiver->start();
+
+        m_worker->setWorkMode(WorkMode::MODE_UDP);
+        m_worker->setDataBuffer(m_dataBuffer);
+        appendLog("\n>> [系统模式] 🚀 已切换为 UDP 实时侦听模式，监听端口: 8888\n");
+    } else {
+        m_worker->setWorkMode(WorkMode::MODE_FILE);
+        m_worker->setDataBuffer(nullptr);
+        appendLog("\n>> [系统模式] 📂 已切换为离线文件回放模式\n");
+    }
+
+    m_worker->start();
+}
+
+void MainWindow::onStopClicked() {
+    // 【新增】：如果开着 UDP 接收器，也要把它关掉
+    if (m_udpReceiver && m_udpReceiver->isRunning()) {
+        m_udpReceiver->stop();
+        m_udpReceiver->wait();
+        appendLog(">> 网络数据接收引擎已停止。\n");
+    }
+
+    if (m_worker->isRunning()) {
+        m_worker->stop();
+
+        QString currentText = m_lblSysInfo->text();
+        currentText.replace("状态: 运行中", "状态: 已手动终止");
+        currentText.replace("状态: 已挂起 (暂停)", "状态: 已手动终止");
+        if (!currentText.contains("结束时间") && !currentText.contains("终止时间")) {
+            currentText += QString("\n终止时间: %1").arg(QDateTime::currentDateTime().toString("HH:mm:ss"));
+        }
+        m_lblSysInfo->setText(currentText);
+
+        appendLog("\n>> 接收到终止指令...\n");
+        m_btnStart->setEnabled(true); m_btnSelectFiles->setEnabled(true); m_btnManualTruth->setEnabled(true);
+        m_chkUdpMode->setEnabled(true); // 恢复 UDP 模式切换的点击
+        m_btnPauseResume->setEnabled(false); m_btnStop->setEnabled(false);
+    }
+}
+
 void MainWindow::setupUi() {
     QWidget* centralWidget = new QWidget(this);
     QVBoxLayout* mainVLayout = new QVBoxLayout(centralWidget);
@@ -730,6 +757,10 @@ void MainWindow::setupUi() {
     QGroupBox* groupButtons = new QGroupBox("系统控制指令区", leftPanel);
     QVBoxLayout* btnLayout = new QVBoxLayout(groupButtons);
 
+    // 【新增】：UDP 实时侦听模式开关
+    m_chkUdpMode = new QCheckBox("开启 UDP 实时水听器直连模式", this);
+    m_chkUdpMode->setStyleSheet("QCheckBox { color: #8e44ad; font-weight: bold; }");
+
     m_btnSelectFiles = new QPushButton(" 数据文件输入...", this);
     m_btnSelectFiles->setIcon(style()->standardIcon(QStyle::SP_DirOpenIcon));
     m_btnManualTruth = new QPushButton(" 目标先验真值配置窗口...", this);
@@ -742,9 +773,29 @@ void MainWindow::setupUi() {
     m_btnStop->setIcon(style()->standardIcon(QStyle::SP_MediaStop));
     m_btnExport      = new QPushButton(" 一键导出日志图片", this);
     m_btnExport->setIcon(style()->standardIcon(QStyle::SP_DialogSaveButton));
+
     m_chkDepthResolve = new QCheckBox("启用 MFP 水上/水下目标分辨", this);
     connect(m_chkDepthResolve, &QCheckBox::toggled, this, &MainWindow::onDepthResolveToggled);
-    m_chkDepthResolve->setChecked(false); // 默认不勾选
+    m_chkDepthResolve->setChecked(false);
+
+    // 【关联】：当勾选UDP时，禁用文件选择按钮
+        connect(m_chkUdpMode, &QCheckBox::toggled, this, [this](bool checked){
+            m_btnSelectFiles->setEnabled(!checked);
+            // 【新增】：如果是 UDP 模式，直接启用开始按钮
+            if (checked) {
+                m_btnStart->setEnabled(true);
+            } else {
+                // 切回文件模式时，只有当已经选择了文件才启用开始按钮
+                m_btnStart->setEnabled(!m_selectedFiles.isEmpty());
+            }
+
+            if (checked) {
+                m_lblSysInfo->setText("状态: 就绪\n模式: UDP网络直连\n待接收数据...");
+            } else {
+                m_lblSysInfo->setText("状态: 就绪\n模式: 离线文件回放\n待导入数据...");
+            }
+        });
+
     m_editDeleteTargetId = new QLineEdit(this);
     m_editDeleteTargetId->setPlaceholderText("要剔除的目标ID...");
     m_btnDeleteTarget = new QPushButton(" 剔除虚假目标", this);
@@ -763,10 +814,12 @@ void MainWindow::setupUi() {
     btnLayout->addWidget(new QLabel("当前任务名称:", leftPanel));
     btnLayout->addWidget(m_editTaskName);
 
+    // 把 UDP 开关加到按钮区最上方
+    btnLayout->addWidget(m_chkUdpMode);
+
     btnLayout->addWidget(m_btnSelectFiles); btnLayout->addWidget(m_btnManualTruth);
     btnLayout->addWidget(m_btnStart); btnLayout->addWidget(m_btnPauseResume);
     btnLayout->addWidget(m_btnStop); btnLayout->addWidget(m_btnExport);
-    // 【修复】：加上这一行，把复选框放进布局里！
     btnLayout->addWidget(m_chkDepthResolve);
     btnLayout->addLayout(delLayout);
     leftLayout->addWidget(groupButtons);
@@ -877,9 +930,6 @@ void MainWindow::setupUi() {
     QGroupBox* groupLog = new QGroupBox("系统状态与终端", rightSidePanel);
     QVBoxLayout* logLayout = new QVBoxLayout(groupLog);
 
-    // ==========================================
-    // 【意见二】：模式状态醒目指示灯与多目标常亮指示灯
-    // ==========================================
     m_lblModeIndicator = new QLabel("⚪ 当前模式: 待就绪", this);
     m_lblModeIndicator->setAlignment(Qt::AlignCenter);
     m_lblModeIndicator->setStyleSheet("background-color: #ecf0f1; color: #7f8c8d; font-size: 14px; font-weight: bold; border: 1px solid #bdc3c7; border-radius: 5px; padding: 6px;");
@@ -891,10 +941,9 @@ void MainWindow::setupUi() {
 
     QHBoxLayout* indicatorLayout = new QHBoxLayout();
     indicatorLayout->addWidget(m_lblModeIndicator);
-    indicatorLayout->addWidget(m_targetLightsWidget); // 放入容器，常亮展示
-    indicatorLayout->addStretch(); // 靠左对齐，不拉伸
+    indicatorLayout->addWidget(m_targetLightsWidget);
+    indicatorLayout->addStretch();
     logLayout->addLayout(indicatorLayout);
-    // ==========================================
 
     m_lblSysInfo = new QLabel("引擎初始化完成，参数已就绪。\n等待注入探测数据...");
     m_lblSysInfo->setStyleSheet("color: #333333; font-weight: bold;");
@@ -1025,21 +1074,14 @@ void MainWindow::setupUi() {
 
     QSplitter* tab4ContentSplitter = new QSplitter(Qt::Vertical, tab4);
 
-    // 1. 创建一个专属容器来垂直排列两个表格
     QWidget* tablesContainer = new QWidget(tab4ContentSplitter);
     QVBoxLayout* tablesLayout = new QVBoxLayout(tablesContainer);
     tablesLayout->setContentsMargins(0, 0, 0, 0);
-    tablesLayout->setSpacing(10); // 两个表格之间留一点间距
+    tablesLayout->setSpacing(10);
 
-    // ==========================================
-    // 表格 1：原版特征提取与综合判定表 (恢复为 9 列，保留蓝色表头)
-    // ==========================================
     m_tableTargetFeatures = new QTableWidget(tablesContainer);
     m_tableTargetFeatures->setColumnCount(9);
-
-    // 恢复原来的表头（保留了“综合判定”，去掉了“水上水下”）
     m_tableTargetFeatures->setHorizontalHeaderLabels({"目标名称/ID", "瞬时线谱群", "瞬时准度", "累积DCV线谱", "DCV准度", "稳定轴频", "真实方位", "解算方位", "综合判定"});
-
     m_tableTargetFeatures->horizontalHeader()->setSectionResizeMode(QHeaderView::Interactive);
     m_tableTargetFeatures->horizontalHeader()->setStretchLastSection(true);
     m_tableTargetFeatures->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
@@ -1051,39 +1093,28 @@ void MainWindow::setupUi() {
     m_tableTargetFeatures->horizontalHeader()->setSectionResizeMode(6, QHeaderView::ResizeToContents);
     m_tableTargetFeatures->horizontalHeader()->setSectionResizeMode(7, QHeaderView::ResizeToContents);
     m_tableTargetFeatures->horizontalHeader()->setSectionResizeMode(8, QHeaderView::ResizeToContents);
-
     m_tableTargetFeatures->setEditTriggers(QAbstractItemView::DoubleClicked);
     m_tableTargetFeatures->setAlternatingRowColors(true);
     m_tableTargetFeatures->setStyleSheet("QTableWidget { background-color: white; border-radius: 8px; } QHeaderView::section { background-color: #0078d7; color: white; font-weight: bold; border: none; padding: 6px; }");
-
     tablesLayout->addWidget(m_tableTargetFeatures);
 
-    // ==========================================
-    // 表格 2：新增的专属 MFP 水上/水下判别表 (6 列，橙色表头)
-    // ==========================================
     m_tableMfpResults = new QTableWidget(tablesContainer);
     m_tableMfpResults->setColumnCount(6);
     m_tableMfpResults->setHorizontalHeaderLabels({"目标名称/ID", "估计深度", "真实深度", "真实类别", "系统判别", "判别结果"});
-
     m_tableMfpResults->horizontalHeader()->setSectionResizeMode(QHeaderView::Interactive);
     m_tableMfpResults->horizontalHeader()->setStretchLastSection(true);
     m_tableMfpResults->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
     for(int i = 1; i < 6; ++i) {
         m_tableMfpResults->horizontalHeader()->setSectionResizeMode(i, QHeaderView::ResizeToContents);
     }
-
     m_tableMfpResults->setEditTriggers(QAbstractItemView::DoubleClicked);
     m_tableMfpResults->setAlternatingRowColors(true);
-    // 橙色表头，与原表格产生鲜明视觉区分
     m_tableMfpResults->setStyleSheet("QTableWidget { background-color: white; border-radius: 8px; } QHeaderView::section { background-color: #e67e22; color: white; font-weight: bold; border: none; padding: 6px; }");
-    m_tableMfpResults->setVisible(false); // 默认隐藏，仅在勾选 MFP 时由后端控制显示
-
+    m_tableMfpResults->setVisible(false);
     tablesLayout->addWidget(m_tableMfpResults);
 
-    // 将包含了两个表格的容器装入界面的分割器中
     tab4ContentSplitter->addWidget(tablesContainer);
 
-    // 绑定两个表格的双击改名信号
     connect(m_tableTargetFeatures, &QTableWidget::itemChanged, this, &MainWindow::onTargetNameChanged);
     connect(m_tableMfpResults, &QTableWidget::itemChanged, this, &MainWindow::onTargetNameChanged);
     QSplitter* midPlotsSplitter = new QSplitter(Qt::Horizontal, tab4ContentSplitter);
@@ -1197,7 +1228,6 @@ void MainWindow::setupUi() {
     resize(1600, 1000);
     setWindowTitle("SonarTracker");
 }
-
 
 
 
@@ -1910,8 +1940,7 @@ void MainWindow::onMfpResultReady(const QList<TargetEvaluation>& mfpResults) {
         const auto& mfp = mfpResults[i];
         m_latestMfpResults[mfp.targetId] = mfp;
 
-        // 【核心修复】：先执行累加逻辑，再进行 UI 渲染
-        // 这样可以确保当前这一批次的结果立即计入 n/m 统计
+        // 保证历史记录精准累加 n/m
         m_mfpTotalCounts[mfp.targetId]++;
         if (mfp.isMfpCorrect) m_mfpCorrectCounts[mfp.targetId]++;
 
@@ -1935,7 +1964,6 @@ void MainWindow::onMfpResultReady(const QList<TargetEvaluation>& mfpResults) {
         else sysClassItem->setForeground(QBrush(QColor(142, 68, 173)));
         m_tableMfpResults->setItem(i, 4, sysClassItem);
 
-        // 使用更新后的 m_mfpCorrectCounts 和 m_mfpTotalCounts 进行显示
         QString resStr = mfp.isMfpCorrect ?
             QString("✅ 正确 (%1/%2)").arg(m_mfpCorrectCounts[mfp.targetId]).arg(m_mfpTotalCounts[mfp.targetId]) :
             QString("❌ 错误 (%1/%2)").arg(m_mfpCorrectCounts[mfp.targetId]).arg(m_mfpTotalCounts[mfp.targetId]);
@@ -1952,6 +1980,7 @@ void MainWindow::onMfpResultReady(const QList<TargetEvaluation>& mfpResults) {
     }
     connect(m_tableMfpResults, &QTableWidget::itemChanged, this, &MainWindow::onTargetNameChanged);
 }
+
 
 
 

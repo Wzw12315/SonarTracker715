@@ -20,6 +20,9 @@
 #include <QPointer>
 #include <QDialog>
 #include <QSpinBox>
+#include "../core/DataBuffer.h"
+#include "../core/UdpReceiver.h"
+
 
 struct PlotLayoutInfo {
     QWidget* originalParent = nullptr;
@@ -184,4 +187,8 @@ private:
     QMap<int, int> m_mfpCorrectCounts;   // 【新增】：长期统计正确次数
         QMap<int, int> m_mfpTotalCounts;     // 【新增】：长期统计总次数
         QMap<int, TargetEvaluation> m_latestMfpResults; // 【新增】：缓存最新深度用于生成终极报告
+
+        DataBuffer* m_dataBuffer = nullptr;
+        QCheckBox* m_chkUdpMode; // <--- Add this line here
+        UdpReceiver* m_udpReceiver = nullptr;
 };

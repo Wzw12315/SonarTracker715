@@ -26,7 +26,7 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTOUIC ON)
 set(CMAKE_AUTORCC ON)
 
-find_package(Qt5 COMPONENTS Core Gui Widgets PrintSupport REQUIRED)
+find_package(Qt5 COMPONENTS Core Gui Widgets PrintSupport Network REQUIRED)
 find_package(Eigen3 3.3 REQUIRED NO_MODULE)
 
 include_directories(
@@ -61,6 +61,10 @@ set(SOURCES
 
     src/core/MfpProcessor.h
     src/core/MfpProcessor.cpp
+
+    src/core/UdpReceiver.h
+    src/core/UdpReceiver.cpp
+    src/core/DataBuffer.h
 )
 
 add_executable(${PROJECT_NAME} ${SOURCES})
@@ -69,6 +73,7 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     Qt5::Widgets
     Qt5::PrintSupport
     Qt5::Core
+    Qt5::Network
     Eigen3::Eigen
     fftw3
 )

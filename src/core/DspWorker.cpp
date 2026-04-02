@@ -183,10 +183,6 @@ void DspWorker::run() {
         precomputed_PSF.col(k) = PSF_f;
     }
 
-    // =========================================================================
-    // 【全新干净的 generateAndEmitEvaluation】
-    // 彻底去除了深度的重复计算，交由 MainWindow 通过 SelfValidator 组装终极报告！
-    // =========================================================================
     auto generateAndEmitEvaluation = [&](bool isFinal = false) {
         double total_time_sec = (globalTimer.elapsed() - total_paused_ms) / 1000.0;
         double realtime_time_sec = totalRealtimeMs / 1000.0;
@@ -384,7 +380,6 @@ void DspWorker::run() {
             tEval.initialCalcAngle = initCalcAngle;
             tEval.currentCalcAngle = currCalcAngle;
 
-            // 剥离MFP深度模块：所有深度默认置空
             tEval.estimatedDepth = -1.0;
             tEval.targetClass = "未知";
             tEval.isMfpCorrect = false;
@@ -392,10 +387,8 @@ void DspWorker::run() {
             evalRes.targetEvals.append(tEval);
         }
 
-        // 发送给 MainWindow，MainWindow 会负责结合表二的真实深度打出终极报告
         emit evaluationResultReady(evalRes);
 
-        // 如果到达结束，仅输出跟踪对比表
         if (isFinal) {
             QString report = "=================================================================================\n";
             report += "                 目标每帧方位角动态跟踪表 (DCV vs CBF 精度对比)              \n";
@@ -422,13 +415,70 @@ void DspWorker::run() {
         }
     };
 
-    for (double current_time : timeToFilesMap.keys()) {
+
+    // =========================================================================
+    // 【全新重构】：基于 "统一事件循环" 实现文件/UDP模式的无缝路由
+    // =========================================================================
+    QList<double> file_times = timeToFilesMap.keys();
+    int file_idx = 0;
+    double current_time_udp = 0.0;
+
+    while (m_isRunning) {
+        // 1. 处理暂停逻辑
         while (m_isPaused && m_isRunning) {
             QElapsedTimer pauseTimer; pauseTimer.start();
             QThread::msleep(100);
             total_paused_ms += pauseTimer.elapsed();
         }
         if (!m_isRunning) break;
+
+        Eigen::MatrixXd signal_raw = Eigen::MatrixXd::Zero(M, NFFT_R);
+        double current_time = 0.0;
+        bool has_data = false;
+
+        // 2. 根据不同模式，提取一帧原始数据
+        if (m_mode == WorkMode::MODE_FILE) {
+            if (file_idx >= file_times.size()) {
+                break; // 文件读取完毕，安全跳出主循环
+            }
+            current_time = file_times[file_idx++];
+            const QStringList& targetFiles = timeToFilesMap[current_time];
+            for(const QString& file : targetFiles) {
+                signal_raw += RawReader::read_raw_file(file.toStdString(), M, NFFT_R);
+            }
+            has_data = true;
+        }
+        else if (m_mode == WorkMode::MODE_UDP) {
+            QByteArray rawBytes;
+            // 从网络缓冲池拉取数据，设置100ms超时防止UI卡死
+            if (m_dataBuffer && m_dataBuffer->popData(rawBytes, 100)) {
+                // 【解析 UDP 原始载荷】
+                // 此处假设为 16位 short，并按 [快拍1所有通道, 快拍2所有通道...] 排列。
+                // 若实际硬件协议有变，仅需微调这几行 for 循环。
+                int expected_bytes = M * NFFT_R * sizeof(short);
+                if (rawBytes.size() >= expected_bytes) {
+                    const short* ptr = reinterpret_cast<const short*>(rawBytes.constData());
+                    for (int j = 0; j < NFFT_R; ++j) {
+                        for (int i = 0; i < M; ++i) {
+                            signal_raw(i, j) = static_cast<double>(ptr[j * M + i]);
+                        }
+                    }
+                }
+                current_time_udp += m_config.timeStep;
+                current_time = current_time_udp;
+                has_data = true;
+            } else {
+                continue; // 没拿到网络包，继续等
+            }
+        }
+
+        // 如果本轮没拿到有效数据，说明在等待网络，跳过算法计算
+        if (!has_data) continue;
+
+
+        // =====================================================================
+        // 以下为统一的核心算法区：不论是文件还是 UDP 来的数据，均一视同仁！
+        // =====================================================================
 
         {
             QMutexLocker locker(&m_removeMutex);
@@ -456,14 +506,10 @@ void DspWorker::run() {
         FrameResult result;
         result.frameIndex = frameIndex;
         result.timestamp = current_time;
-        const QStringList& targetFiles = timeToFilesMap[current_time];
 
         sectionTimer.restart();
 
         try {
-            Eigen::MatrixXd signal_raw = Eigen::MatrixXd::Zero(M, NFFT_R);
-            for(const QString& file : targetFiles) signal_raw += RawReader::read_raw_file(file.toStdString(), M, NFFT_R);
-
             signal_w.leftCols(NFFT_WIN - NFFT_R) = signal_w.rightCols(NFFT_WIN - NFFT_R);
             signal_w.rightCols(NFFT_R) = signal_raw;
 
@@ -616,7 +662,6 @@ void DspWorker::run() {
 
                     t.lineSpectrumAmpDcv = QVector<double>(accum_dcv_db.size(), -150.0);
 
-                    // ==== 【MFP 深度分辨相关的代码已彻底删除，完全交由 MainWindow 和 SelfValidator 接管】 ====
                     for(int idx : locs_dcv) {
                         if (snr_dcv_db(idx) >= 3.0) {
                             double freq_val = f_lofar_vec(idx);
@@ -725,7 +770,7 @@ void DspWorker::run() {
 
         totalRealtimeMs += sectionTimer.elapsed();
 
-        if (batch_frames.size() == m_config.batchSize || frameIndex == timeToFilesMap.size()) {
+        if (batch_frames.size() == m_config.batchSize || (m_mode == WorkMode::MODE_FILE && file_idx == file_times.size())) {
             sectionTimer.restart();
             std::vector<BatchTargetFeature> batchFeatures;
             int currentEndFrame = frameIndex;
@@ -877,19 +922,23 @@ void DspWorker::run() {
             batchIndex++;
             batchStartFrame = frameIndex + 1;
 
-            bool isLastBatch = (frameIndex == timeToFilesMap.size());
+            bool isLastBatch = (m_mode == WorkMode::MODE_FILE && file_idx == file_times.size());
             generateAndEmitEvaluation(isLastBatch);
         }
         frameIndex++;
     }
 
-    if (!m_isRunning) {
-        bool isLastBatchPerfectMatch = ((frameIndex - 1) > 0 &&
-                                        (frameIndex - 1) == timeToFilesMap.size() &&
-                                        (frameIndex - 1) % m_config.batchSize == 0);
-        if (!isLastBatchPerfectMatch) {
-            generateAndEmitEvaluation(true);
-        }
+    // 循环退出后的收尾工作与状态打磨
+    bool isLastBatchPerfectMatch = ((frameIndex - 1) > 0 && (frameIndex - 1) % m_config.batchSize == 0);
+    if (m_mode == WorkMode::MODE_FILE) {
+        isLastBatchPerfectMatch = isLastBatchPerfectMatch && ((frameIndex - 1) == file_times.size());
+    } else {
+        // 对于 UDP 模式，只要被人工 Stop 截停，为了确保结果不丢失，强制判定为不完美匹配，触发一次兜底总结
+        isLastBatchPerfectMatch = false;
+    }
+
+    if (!isLastBatchPerfectMatch) {
+        generateAndEmitEvaluation(true);
     }
 
     fftw_destroy_plan(plan_ifft); fftw_free(demon_ifft_in); fftw_free(demon_ifft_out);
