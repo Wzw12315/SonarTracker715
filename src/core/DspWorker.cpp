@@ -422,7 +422,8 @@ void DspWorker::run() {
     QList<double> file_times = timeToFilesMap.keys();
     int file_idx = 0;
     double current_time_udp = 0.0;
-
+    //    // 👇 【新增这一行】：用于拼接 UDP 碎片的累积器
+    //        QByteArray udpAccumulator;
     while (m_isRunning) {
         // 1. 处理暂停逻辑
         while (m_isPaused && m_isRunning) {
@@ -449,37 +450,42 @@ void DspWorker::run() {
             has_data = true;
         }
         else if (m_mode == WorkMode::MODE_UDP) {
-            QByteArray rawBytes;
-            // 从网络缓冲池拉取数据，设置100ms超时防止UI卡死
-            if (m_dataBuffer && m_dataBuffer->popData(rawBytes, 100)) {
-                // 【解析 UDP 原始载荷】
-                // 此处假设为 16位 short，并按 [快拍1所有通道, 快拍2所有通道...] 排列。
-                // 若实际硬件协议有变，仅需微调这几行 for 循环。
-                int expected_bytes = M * NFFT_R * sizeof(short);
-                if (rawBytes.size() >= expected_bytes) {
-                    const short* ptr = reinterpret_cast<const short*>(rawBytes.constData());
-                    for (int j = 0; j < NFFT_R; ++j) {
-                        for (int i = 0; i < M; ++i) {
-                            signal_raw(i, j) = static_cast<double>(ptr[j * M + i]);
-                        }
-                    }
+            QByteArray fullFrameBytes;
+
+            // 阻塞等待 100ms 拉取完整的一帧
+            if (m_dataBuffer && m_dataBuffer->popData(fullFrameBytes, 100)) {
+
+                // 【核心修正】：你的 raw 文件数据格式是单精度浮点数 float (4字节)，不是 short！
+                int expected_bytes = M * NFFT_R * sizeof(float);
+
+                if (fullFrameBytes.size() >= expected_bytes) {
+                    // 【与 RawReader.cpp 完美对齐的解析方式】
+                    // 1. 将收到的字节流强制映射为 float 指针
+                    const float* ptr = reinterpret_cast<const float*>(fullFrameBytes.constData());
+
+                    // 2. 利用 Eigen::Map 直接映射，避免 for 循环带来的性能损耗和可能的行列错位
+                    Eigen::Map<const Eigen::MatrixXf> fmat(ptr, M, NFFT_R);
+
+                    // 3. 自动提升为 double 类型供核心算法处理 (完全复刻 RawReader 的逻辑)
+                    signal_raw = fmat.cast<double>();
+
+                    current_time_udp += m_config.timeStep;
+                    current_time = current_time_udp;
+                    has_data = true; // 拿到整帧正确数据了！
+                } else {
+                    qDebug() << "[DspWorker] ⚠️ 收到异常帧大小:" << fullFrameBytes.size() << "期望:" << expected_bytes;
                 }
-                current_time_udp += m_config.timeStep;
-                current_time = current_time_udp;
-                has_data = true;
             } else {
-                continue; // 没拿到网络包，继续等
+                continue;
             }
         }
 
         // 如果本轮没拿到有效数据，说明在等待网络，跳过算法计算
         if (!has_data) continue;
 
-
         // =====================================================================
         // 以下为统一的核心算法区：不论是文件还是 UDP 来的数据，均一视同仁！
         // =====================================================================
-
         {
             QMutexLocker locker(&m_removeMutex);
             if (!m_targetsToRemove.isEmpty()) {

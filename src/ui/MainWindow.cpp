@@ -1985,18 +1985,26 @@ void MainWindow::onMfpResultReady(const QList<TargetEvaluation>& mfpResults) {
 
 
 void MainWindow::onEvaluationResultReady(const SystemEvaluationResult& res) {
+    // 【新增】：计算空闲/等待时间
+    double idleTimeSec = res.totalTimeSec - res.realtimeTimeSec - res.batchTimeSec;
+    if (idleTimeSec < 0) idleTimeSec = 0.0; // 防止浮点数精度导致的微小负数
+
     m_lblStatTime->setText(QString("<span style='font-size:32px; color:#27ae60;'>%1</span>"
                                    "<span style='font-size:16px; color:#7f8c8d;'> s </span>"
                                    "<span style='font-size:14px; color:#7f8c8d;'>(实时 </span>"
                                    "<span style='font-size:18px; color:#2980b9;'>%2</span>"
                                    "<span style='font-size:14px; color:#7f8c8d;'> s | 批处理 </span>"
                                    "<span style='font-size:18px; color:#e67e22;'>%3</span>"
+                                   "<span style='font-size:14px; color:#7f8c8d;'> s | 等待 </span>"
+                                   "<span style='font-size:18px; color:#8e44ad;'>%4</span>"
                                    "<span style='font-size:14px; color:#7f8c8d;'> s)</span>")
                            .arg(res.totalTimeSec, 0, 'f', 1)
                            .arg(res.realtimeTimeSec, 0, 'f', 1)
-                           .arg(res.batchTimeSec, 0, 'f', 2));
+                           .arg(res.batchTimeSec, 0, 'f', 2)
+                           .arg(idleTimeSec, 0, 'f', 1)); // 【新增】绑定位位等待时间
 
     m_lblStatTargets->setText(QString("<span style='font-size:36px; color:#2980b9;'>%1</span> 艘").arg(res.confirmedTargetCount));
+// ... 下面的代码保持不变 ...
 
     disconnect(m_tableTargetFeatures, &QTableWidget::itemChanged, this, &MainWindow::onTargetNameChanged);
 
@@ -2180,8 +2188,19 @@ void MainWindow::onEvaluationResultReady(const SystemEvaluationResult& res) {
         finalReport += "                               高 级 航 迹 管 理 终 极 评 估 报 告                               \n";
         finalReport += "=================================================================================\n";
         finalReport += "【系统级总体评价】\n";
-        finalReport += QString("  ▶ 全流程总计耗时: %1 秒 (实时解算: %2 秒 | 离线寻优: %3 秒)\n").arg(res.totalTimeSec, 0, 'f', 2).arg(res.realtimeTimeSec, 0, 'f', 2).arg(res.batchTimeSec, 0, 'f', 2);
-        finalReport += QString("  ▶ 稳定提取目标数: %1 个\n\n").arg(res.confirmedTargetCount);
+        finalReport += "【系统级总体评价】\n";
+
+                // 【修改】：在报告中也加上挂起/传输等待时间
+                double idleTimeSec = res.totalTimeSec - res.realtimeTimeSec - res.batchTimeSec;
+                if (idleTimeSec < 0) idleTimeSec = 0.0;
+
+                finalReport += QString("  ▶ 全流程总计耗时: %1 秒 (实时解算: %2 秒 | 离线寻优: %3 秒 | 网络传输与挂起: %4 秒)\n")
+                                .arg(res.totalTimeSec, 0, 'f', 2)
+                                .arg(res.realtimeTimeSec, 0, 'f', 2)
+                                .arg(res.batchTimeSec, 0, 'f', 2)
+                                .arg(idleTimeSec, 0, 'f', 2);
+
+                finalReport += QString("  ▶ 稳定提取目标数: %1 个\n\n").arg(res.confirmedTargetCount);
 
         if (res.isMfpEnabled) finalReport += "【最终目标水上/水下分辨与特征提取总结表】\n";
         else finalReport += "【最终目标特征提取池总结表】\n";

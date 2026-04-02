@@ -168,6 +168,7 @@ struct SystemEvaluationResult {
     double totalTimeSec;
     double realtimeTimeSec;
     double batchTimeSec;
+
     int confirmedTargetCount;
     bool isMfpEnabled = false;
     bool isFinal = false; // 标记是否为终极报告

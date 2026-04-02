@@ -4,13 +4,7 @@
 #include <QQueue>
 #include <QByteArray>
 
-// 定义 UDP 传输的自定义协议头 (1字节对齐防止跨平台错位)
-#pragma pack(push, 1)
-struct PacketHeader {
-    uint32_t seqNum;        // 数据包序号，用于防丢包和乱序
-    uint32_t payloadSize;   // 有效载荷大小
-};
-#pragma pack(pop)
+// 【注意：这里原本的 PacketHeader 定义已经被删除了，统一移到了 UdpReceiver.h 中】
 
 class DataBuffer {
 public:
@@ -38,11 +32,13 @@ public:
         }
         return false;
     }
+
     // Add this new clear method
-        void clear() {
-            QMutexLocker locker(&m_mutex);
-            m_queue.clear();
-        }
+    void clear() {
+        QMutexLocker locker(&m_mutex);
+        m_queue.clear();
+    }
+
 private:
     QQueue<QByteArray> m_queue;
     QMutex m_mutex;
