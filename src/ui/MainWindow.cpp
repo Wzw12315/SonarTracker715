@@ -355,6 +355,12 @@ void MainWindow::setupPlotInteraction(QCustomPlot* plot) {
 
 void MainWindow::updatePlotOriginalRange(QCustomPlot* plot) {
     if (!plot) return;
+
+    // 【核心修复】：如果已经记录过初始范围，直接跳过。
+        // 防止逐帧刷新时把用户手动放大后的坐标当成“原始坐标”给覆盖掉。
+        if (plot->property("hasOrigRange").toBool()) {
+            return;
+        }
     plot->setProperty("hasOrigRange", true);
     plot->setProperty("origXMin", plot->xAxis->range().lower);
     plot->setProperty("origXMax", plot->xAxis->range().upper);
@@ -520,15 +526,30 @@ void MainWindow::onPlotDoubleClick(QMouseEvent *event) {
     QCustomPlot* plot = qobject_cast<QCustomPlot*>(sender());
     if (!plot) return;
 
-    if (plot->property("hasOrigRange").toBool()) {
-        plot->xAxis->setRange(plot->property("origXMin").toDouble(), plot->property("origXMax").toDouble());
-        plot->yAxis->setRange(plot->property("origYMin").toDouble(), plot->property("origYMax").toDouble());
-    } else {
-        plot->rescaleAxes();
+    // 【体验优化】：针对包含固定物理边界和滚动时间轴的特殊图表，采用智能自适应复原
+    if (plot == m_spatialPlot || plot == m_timeAzimuthPlot ||
+        plot == m_cbfWaterfallPlot || plot == m_dcvWaterfallPlot) {
+
+        plot->xAxis->setRange(0, 180); // X轴始终恢复到标准的 0~180 度全景
+
+        if (plot == m_spatialPlot) {
+            plot->yAxis->setRange(-40, 5); // 空间谱恢复固定动态范围
+        } else {
+            plot->yAxis->rescale();        // 历程图和瀑布图的物理时间轴自适应贴合到最新进度
+        }
     }
+    // 其余静态切片图和频谱图，恢复最初始记录的坐标范围
+    else {
+        if (plot->property("hasOrigRange").toBool()) {
+            plot->xAxis->setRange(plot->property("origXMin").toDouble(), plot->property("origXMax").toDouble());
+            plot->yAxis->setRange(plot->property("origYMin").toDouble(), plot->property("origYMax").toDouble());
+        } else {
+            plot->rescaleAxes();
+        }
+    }
+
     plot->replot();
 }
-
 // 【新增函数】：用于将用户填写的要剔除的ID发送给Worker线程
 void MainWindow::onDeleteTargetClicked() {
     bool ok;
@@ -1573,12 +1594,12 @@ void MainWindow::createTargetPlots(int targetId) {
 
     m_lsPlots.insert(targetId, lsPlot); m_lofarPlots.insert(targetId, lofarPlot); m_demonPlots.insert(targetId, demonPlot);
     int col = targetId - 1;
-    m_targetLayout->addWidget(lsPlot, 0, col); m_targetLayout->addWidget(lofarPlot, 1, col); m_targetLayout->addWidget(demonPlot, 2, col);
-//    // 【优化逻辑】：目标编号决定行 (row)，图表类型固定为 3 列 (0, 1, 2)
-//        int row = targetId - 1; // 每个目标独占一行
-//        m_targetLayout->addWidget(lsPlot, row, 0);   // 第0列：瞬时线谱
-//        m_targetLayout->addWidget(lofarPlot, row, 1); // 第1列：LOFAR谱
-//        m_targetLayout->addWidget(demonPlot, row, 2); // 第2列：DEMON谱
+//    m_targetLayout->addWidget(lsPlot, 0, col); m_targetLayout->addWidget(lofarPlot, 1, col); m_targetLayout->addWidget(demonPlot, 2, col);
+    // 【优化逻辑】：目标编号决定行 (row)，图表类型固定为 3 列 (0, 1, 2)
+        int row = targetId - 1; // 每个目标独占一行
+        m_targetLayout->addWidget(lsPlot, row, 0);   // 第0列：瞬时线谱
+        m_targetLayout->addWidget(lofarPlot, row, 1); // 第1列：LOFAR谱
+        m_targetLayout->addWidget(demonPlot, row, 2); // 第2列：DEMON谱
 }
 
 
@@ -1768,79 +1789,86 @@ void MainWindow::onOfflineResultsReady(const QList<OfflineTargetResult>& results
         delete item;
     }
 
-    int col = 0;
-    for (const auto& res : results) {
-        QCustomPlot* pRaw = new QCustomPlot(m_lofarWaterfallWidget);
-        pRaw->setObjectName(QString("offline_raw_%1").arg(res.targetId));
-        setupPlotInteraction(pRaw);
-        pRaw->setMinimumSize(400, 250); m_lofarWaterfallLayout->addWidget(pRaw, 0, col);
-        pRaw->plotLayout()->insertRow(0);
-        pRaw->plotLayout()->addElement(0, 0, new QCPTextElement(pRaw, QString("目标%1 原始LOFAR谱 (随批次积累)").arg(res.targetId), QFont("sans", 10, QFont::Bold)));
-        QCPColorMap *cmapRaw = new QCPColorMap(pRaw->xAxis, pRaw->yAxis);
-        cmapRaw->data()->setSize(res.freqBins, res.timeFrames); cmapRaw->data()->setRange(QCPRange(0, m_currentConfig.fs/2.0), QCPRange(res.minTime, res.maxTime));
-        double rmax = -999; for(double v : res.rawLofarDb) if(v > rmax) rmax = v;
-        for(int t=0; t<res.timeFrames; ++t) for(int f=0; f<res.freqBins; ++f) cmapRaw->data()->setCell(f, t, res.rawLofarDb[t * res.freqBins + f] - rmax);
-        cmapRaw->setGradient(QCPColorGradient::gpJet); cmapRaw->setInterpolate(true);
-        cmapRaw->setDataRange(QCPRange(-40.0, 0)); cmapRaw->setTightBoundary(true);
-        pRaw->xAxis->setLabel("频率/Hz"); pRaw->yAxis->setLabel("物理时间/s");
-        pRaw->xAxis->setRange(res.displayFreqMin, res.displayFreqMax); pRaw->yAxis->setRange(res.minTime, res.maxTime);
-        updatePlotOriginalRange(pRaw);
+    int row = 0; // 【修改点1】：将 col 改为 row
+        for (const auto& res : results) {
+            QCustomPlot* pRaw = new QCustomPlot(m_lofarWaterfallWidget);
+            pRaw->setObjectName(QString("offline_raw_%1").arg(res.targetId));
+            setupPlotInteraction(pRaw);
+            pRaw->setMinimumSize(400, 250);
 
-        QCustomPlot* pTpsw = new QCustomPlot(m_lofarWaterfallWidget);
-        pTpsw->setObjectName(QString("offline_tpsw_%1").arg(res.targetId));
-        setupPlotInteraction(pTpsw);
-        pTpsw->setMinimumSize(400, 250); m_lofarWaterfallLayout->addWidget(pTpsw, 1, col);
-        pTpsw->plotLayout()->insertRow(0);
-        pTpsw->plotLayout()->addElement(0, 0, new QCPTextElement(pTpsw, QString("目标%1 历史LOFAR谱 (TPSW背景均衡)").arg(res.targetId), QFont("sans", 10, QFont::Bold)));
-        QCPColorMap *cmapTpsw = new QCPColorMap(pTpsw->xAxis, pTpsw->yAxis);
-        cmapTpsw->data()->setSize(res.freqBins, res.timeFrames); cmapTpsw->data()->setRange(QCPRange(0, m_currentConfig.fs/2.0), QCPRange(res.minTime, res.maxTime));
+            // 【修改点2】：RAW 放在当前 row 的第 0 列
+            m_lofarWaterfallLayout->addWidget(pRaw, row, 0);
 
-        double tpswMaxVal = -9999.0;
-        for(int t=0; t<res.timeFrames; ++t) {
-            for(int f=0; f<res.freqBins; ++f) {
-                double val = res.tpswLofarDb[t * res.freqBins + f];
-                cmapTpsw->data()->setCell(f, t, val);
-                if (val > tpswMaxVal) tpswMaxVal = val;
+            pRaw->plotLayout()->insertRow(0);
+            pRaw->plotLayout()->addElement(0, 0, new QCPTextElement(pRaw, QString("目标%1 原始LOFAR谱 (随批次积累)").arg(res.targetId), QFont("sans", 10, QFont::Bold)));
+            QCPColorMap *cmapRaw = new QCPColorMap(pRaw->xAxis, pRaw->yAxis);
+            cmapRaw->data()->setSize(res.freqBins, res.timeFrames); cmapRaw->data()->setRange(QCPRange(0, m_currentConfig.fs/2.0), QCPRange(res.minTime, res.maxTime));
+            double rmax = -999; for(double v : res.rawLofarDb) if(v > rmax) rmax = v;
+            for(int t=0; t<res.timeFrames; ++t) for(int f=0; f<res.freqBins; ++f) cmapRaw->data()->setCell(f, t, res.rawLofarDb[t * res.freqBins + f] - rmax);
+            cmapRaw->setGradient(QCPColorGradient::gpJet); cmapRaw->setInterpolate(true);
+            cmapRaw->setDataRange(QCPRange(-40.0, 0)); cmapRaw->setTightBoundary(true);
+            pRaw->xAxis->setLabel("频率/Hz"); pRaw->yAxis->setLabel("物理时间/s");
+            pRaw->xAxis->setRange(res.displayFreqMin, res.displayFreqMax); pRaw->yAxis->setRange(res.minTime, res.maxTime);
+            updatePlotOriginalRange(pRaw);
+
+            QCustomPlot* pTpsw = new QCustomPlot(m_lofarWaterfallWidget);
+            pTpsw->setObjectName(QString("offline_tpsw_%1").arg(res.targetId));
+            setupPlotInteraction(pTpsw);
+            pTpsw->setMinimumSize(400, 250);
+
+            // 【修改点3】：TPSW 放在当前 row 的第 1 列
+            m_lofarWaterfallLayout->addWidget(pTpsw, row, 1);
+
+            pTpsw->plotLayout()->insertRow(0);
+            pTpsw->plotLayout()->addElement(0, 0, new QCPTextElement(pTpsw, QString("目标%1 历史LOFAR谱 (TPSW背景均衡)").arg(res.targetId), QFont("sans", 10, QFont::Bold)));
+            QCPColorMap *cmapTpsw = new QCPColorMap(pTpsw->xAxis, pTpsw->yAxis);
+            cmapTpsw->data()->setSize(res.freqBins, res.timeFrames); cmapTpsw->data()->setRange(QCPRange(0, m_currentConfig.fs/2.0), QCPRange(res.minTime, res.maxTime));
+
+            double tpswMaxVal = -9999.0;
+            for(int t=0; t<res.timeFrames; ++t) {
+                for(int f=0; f<res.freqBins; ++f) {
+                    double val = res.tpswLofarDb[t * res.freqBins + f];
+                    cmapTpsw->data()->setCell(f, t, val);
+                    if (val > tpswMaxVal) tpswMaxVal = val;
+                }
             }
+            cmapTpsw->setGradient(QCPColorGradient::gpJet); cmapTpsw->setInterpolate(true);
+
+            double lowerBound = (tpswMaxVal > 15.0) ? (tpswMaxVal - 10.0) : 3.0;
+
+            cmapTpsw->setDataRange(QCPRange(lowerBound, tpswMaxVal));
+            cmapTpsw->setTightBoundary(true);
+
+            pTpsw->xAxis->setLabel("频率/Hz"); pTpsw->yAxis->setLabel("物理时间/s");
+            pTpsw->xAxis->setRange(res.displayFreqMin, res.displayFreqMax); pTpsw->yAxis->setRange(res.minTime, res.maxTime);
+            updatePlotOriginalRange(pTpsw);
+
+            QCustomPlot* pDp = new QCustomPlot(m_lofarWaterfallWidget);
+            pDp->setObjectName(QString("offline_dp_%1").arg(res.targetId));
+            setupPlotInteraction(pDp);
+            pDp->setMinimumSize(400, 250);
+
+            // 【修改点4】：DP 放在当前 row 的第 2 列
+            m_lofarWaterfallLayout->addWidget(pDp, row, 2);
+
+            pDp->plotLayout()->insertRow(0);
+            pDp->plotLayout()->addElement(0, 0, new QCPTextElement(pDp, QString("目标%1 专属线谱连续轨迹图 (DP寻优)").arg(res.targetId), QFont("sans", 10, QFont::Bold)));
+            QCPColorMap *cmapDp = new QCPColorMap(pDp->xAxis, pDp->yAxis);
+            cmapDp->data()->setSize(res.freqBins, res.timeFrames); cmapDp->data()->setRange(QCPRange(0, m_currentConfig.fs/2.0), QCPRange(res.minTime, res.maxTime));
+            for(int t=0; t<res.timeFrames; ++t) for(int f=0; f<res.freqBins; ++f) cmapDp->data()->setCell(f, t, res.dpCounter[t * res.freqBins + f]);
+
+            cmapDp->setGradient(QCPColorGradient::gpJet);
+            cmapDp->setInterpolate(true);
+            cmapDp->setDataRange(QCPRange(0, 10));
+            cmapDp->setTightBoundary(true);
+
+            pDp->xAxis->setLabel("频率/Hz"); pDp->yAxis->setLabel("物理时间/s");
+            pDp->xAxis->setRange(res.displayFreqMin, res.displayFreqMax); pDp->yAxis->setRange(res.minTime, res.maxTime);
+            updatePlotOriginalRange(pDp);
+
+            row++; // 【修改点5】：本目标处理完毕，行数加 1
         }
-        cmapTpsw->setGradient(QCPColorGradient::gpJet); cmapTpsw->setInterpolate(true);
-
-        double lowerBound = (tpswMaxVal > 15.0) ? (tpswMaxVal - 10.0) : 3.0;
-
-        cmapTpsw->setDataRange(QCPRange(lowerBound, tpswMaxVal));
-        cmapTpsw->setTightBoundary(true);
-
-        pTpsw->xAxis->setLabel("频率/Hz"); pTpsw->yAxis->setLabel("物理时间/s");
-        pTpsw->xAxis->setRange(res.displayFreqMin, res.displayFreqMax); pTpsw->yAxis->setRange(res.minTime, res.maxTime);
-        updatePlotOriginalRange(pTpsw);
-
-        QCustomPlot* pDp = new QCustomPlot(m_lofarWaterfallWidget);
-        pDp->setObjectName(QString("offline_dp_%1").arg(res.targetId));
-        setupPlotInteraction(pDp);
-        pDp->setMinimumSize(400, 250); m_lofarWaterfallLayout->addWidget(pDp, 2, col);
-        pDp->plotLayout()->insertRow(0);
-        pDp->plotLayout()->addElement(0, 0, new QCPTextElement(pDp, QString("目标%1 专属线谱连续轨迹图 (DP寻优)").arg(res.targetId), QFont("sans", 10, QFont::Bold)));
-        QCPColorMap *cmapDp = new QCPColorMap(pDp->xAxis, pDp->yAxis);
-        cmapDp->data()->setSize(res.freqBins, res.timeFrames); cmapDp->data()->setRange(QCPRange(0, m_currentConfig.fs/2.0), QCPRange(res.minTime, res.maxTime));
-        for(int t=0; t<res.timeFrames; ++t) for(int f=0; f<res.freqBins; ++f) cmapDp->data()->setCell(f, t, res.dpCounter[t * res.freqBins + f]);
-
-        // ==========================================================
-        // 【优化四】：强行开启双线性插值！搭配上方传来的 500 超高能量，
-        // 将在降采样时完美融合为一根显眼的连续红线！
-        // ==========================================================
-        cmapDp->setGradient(QCPColorGradient::gpJet);
-        cmapDp->setInterpolate(false);  // 这里由 false 改为了 true！
-        cmapDp->setDataRange(QCPRange(0, 10));
-        cmapDp->setTightBoundary(true);
-
-        pDp->xAxis->setLabel("频率/Hz"); pDp->yAxis->setLabel("物理时间/s");
-        pDp->xAxis->setRange(res.displayFreqMin, res.displayFreqMax); pDp->yAxis->setRange(res.minTime, res.maxTime);
-        updatePlotOriginalRange(pDp);
-
-        col++;
-    }
 }
-
 
 void MainWindow::updateTab2Plots() {
     if (m_historyResults.isEmpty()) return;
@@ -1929,100 +1957,111 @@ void MainWindow::updateTab2Plots() {
         }
     }
 
-    int col = 0;
-    for (int tid : sortedIds) {
-        int active_frames = 0; double sum_ang = 0.0;
-        QVector<double> slice_cbf_sum; QVector<double> slice_dcv_sum;
+    int row = 0; // 【修改点1】：将 col 变量改为 row 变量
+        for (int tid : sortedIds) {
+            int active_frames = 0; double sum_ang = 0.0;
+            QVector<double> slice_cbf_sum; QVector<double> slice_dcv_sum;
 
-        for (const auto& frame : m_historyResults) {
-            for (const auto& tr : frame.tracks) {
-                if (tr.id == tid && tr.isActive && !tr.lofarFullLinear.isEmpty() && !tr.cbfLofarFullLinear.isEmpty()) {
-                    if (slice_dcv_sum.isEmpty()) {
-                        slice_cbf_sum.resize(tr.cbfLofarFullLinear.size()); slice_dcv_sum.resize(tr.lofarFullLinear.size());
-                        slice_cbf_sum.fill(0.0); slice_dcv_sum.fill(0.0);
+            for (const auto& frame : m_historyResults) {
+                for (const auto& tr : frame.tracks) {
+                    if (tr.id == tid && tr.isActive && !tr.lofarFullLinear.isEmpty() && !tr.cbfLofarFullLinear.isEmpty()) {
+                        if (slice_dcv_sum.isEmpty()) {
+                            slice_cbf_sum.resize(tr.cbfLofarFullLinear.size()); slice_dcv_sum.resize(tr.lofarFullLinear.size());
+                            slice_cbf_sum.fill(0.0); slice_dcv_sum.fill(0.0);
+                        }
+                        for(int i=0; i<slice_dcv_sum.size(); ++i) {
+                            slice_cbf_sum[i] += tr.cbfLofarFullLinear[i]; slice_dcv_sum[i] += tr.lofarFullLinear[i];
+                        }
+                        sum_ang += tr.currentAngle; active_frames++;
+                        break;
                     }
-                    for(int i=0; i<slice_dcv_sum.size(); ++i) {
-                        slice_cbf_sum[i] += tr.cbfLofarFullLinear[i]; slice_dcv_sum[i] += tr.lofarFullLinear[i];
+                }
+            }
+
+            if (active_frames > 0 && !slice_dcv_sum.isEmpty()) {
+                double avg_ang = sum_ang / active_frames;
+                std::vector<double> v_cbf(slice_cbf_sum.size()), v_dcv(slice_dcv_sum.size());
+                for(int i=0; i<slice_dcv_sum.size(); ++i) {
+                    v_cbf[i] = slice_cbf_sum[i] / active_frames; v_dcv[i] = slice_dcv_sum[i] / active_frames;
+                }
+                double max_cbf = *std::max_element(v_cbf.begin(), v_cbf.end());
+                double max_dcv = *std::max_element(v_dcv.begin(), v_dcv.end());
+
+                QVector<double> f_axis(v_dcv.size()); QVector<double> cbf_db(v_cbf.size()); QVector<double> dcv_db(v_dcv.size());
+                double df_calc = (v_dcv.size() > 1) ? (m_currentConfig.fs / 2.0) / (v_dcv.size() - 1) : 1.0;
+                for(int i=0; i<v_dcv.size(); ++i) {
+                    f_axis[i] = i * df_calc;
+                    dcv_db[i] = std::max(-80.0, 10.0 * std::log10(v_dcv[i] / (max_dcv + 1e-12) + 1e-12));
+                    cbf_db[i] = std::max(-80.0, 10.0 * std::log10(v_cbf[i] / (max_cbf + 1e-12) + 1e-12));
+                }
+
+                QString cbfName = QString("slice_cbf_%1").arg(tid);
+                QCustomPlot* pCbf = m_sliceWidget->findChild<QCustomPlot*>(cbfName);
+                if (!pCbf) {
+                    pCbf = new QCustomPlot(m_sliceWidget); pCbf->setObjectName(cbfName); setupPlotInteraction(pCbf);
+                    pCbf->setMinimumSize(400, 250); pCbf->addGraph(); pCbf->graph(0)->setPen(QPen(Qt::gray, 2.0));
+                    pCbf->plotLayout()->insertRow(0); pCbf->plotLayout()->addElement(0, 0, new QCPTextElement(pCbf, "", QFont("sans", 10, QFont::Bold)));
+                    pCbf->xAxis->setRange(m_currentConfig.lofarMin, m_currentConfig.lofarMax); pCbf->yAxis->setRange(-80, 5);
+                    pCbf->xAxis->setVisible(false);
+
+                    // 【修改点2】：将 CBF 图表固定放置在当前 row 的第 0 列
+                    m_sliceLayout->addWidget(pCbf, row, 0);
+                }
+                pCbf->graph(0)->setData(f_axis, cbf_db);
+                if (auto* title = qobject_cast<QCPTextElement*>(pCbf->plotLayout()->element(0, 0))) title->setText(QString("目标%1 (约 %2°) - CBF").arg(tid).arg(avg_ang, 0, 'f', 1));
+
+                // 【修改点3】：因为现在纵向排列了，所以所有图表都应该显示 Y 轴标签
+                pCbf->yAxis->setLabel("相对功率 / dB");
+                pCbf->replot(); updatePlotOriginalRange(pCbf);
+
+                QString dcvName = QString("slice_dcv_%1").arg(tid);
+                QCustomPlot* pDcv = m_sliceWidget->findChild<QCustomPlot*>(dcvName);
+                if (!pDcv) {
+                    pDcv = new QCustomPlot(m_sliceWidget); pDcv->setObjectName(dcvName); setupPlotInteraction(pDcv);
+                    pDcv->setMinimumSize(400, 250); pDcv->addGraph(); pDcv->graph(0)->setPen(QPen(Qt::red, 1.5));
+                    pDcv->plotLayout()->insertRow(0); pDcv->plotLayout()->addElement(0, 0, new QCPTextElement(pDcv, "", QFont("sans", 10, QFont::Bold)));
+                    pDcv->xAxis->setRange(m_currentConfig.lofarMin, m_currentConfig.lofarMax); pDcv->yAxis->setRange(-80, 5);
+                    pDcv->xAxis->setLabel("频率 / Hz");
+
+                    // 【修改点4】：将 DCV 图表固定放置在当前 row 的第 1 列
+                    m_sliceLayout->addWidget(pDcv, row, 1);
+                }
+                pDcv->graph(0)->setData(f_axis, dcv_db);
+
+                // ========================================================
+                // 【保留】：在 DCV 上画出累积提取的蓝点线谱
+                // ========================================================
+                if (pDcv->graphCount() < 2) {
+                    pDcv->addGraph();
+                    pDcv->graph(1)->setLineStyle(QCPGraph::lsNone);
+                    pDcv->graph(1)->setScatterStyle(QCPScatterStyle(QCPScatterStyle::ssCircle, Qt::blue, Qt::white, 6));
+                }
+                QVector<double> peakF, peakA;
+                const TargetTrack* lastTr = nullptr;
+                for(int k=m_historyResults.size()-1; k>=0; --k) {
+                    for(const auto& tr : m_historyResults[k].tracks) {
+                        if (tr.id == tid) { lastTr = &tr; break; }
                     }
-                    sum_ang += tr.currentAngle; active_frames++;
-                    break;
+                    if (lastTr) break;
                 }
-            }
-        }
-
-        if (active_frames > 0 && !slice_dcv_sum.isEmpty()) {
-            double avg_ang = sum_ang / active_frames;
-            std::vector<double> v_cbf(slice_cbf_sum.size()), v_dcv(slice_dcv_sum.size());
-            for(int i=0; i<slice_dcv_sum.size(); ++i) {
-                v_cbf[i] = slice_cbf_sum[i] / active_frames; v_dcv[i] = slice_dcv_sum[i] / active_frames;
-            }
-            double max_cbf = *std::max_element(v_cbf.begin(), v_cbf.end());
-            double max_dcv = *std::max_element(v_dcv.begin(), v_dcv.end());
-
-            QVector<double> f_axis(v_dcv.size()); QVector<double> cbf_db(v_cbf.size()); QVector<double> dcv_db(v_dcv.size());
-            double df_calc = (v_dcv.size() > 1) ? (m_currentConfig.fs / 2.0) / (v_dcv.size() - 1) : 1.0;
-            for(int i=0; i<v_dcv.size(); ++i) {
-                f_axis[i] = i * df_calc;
-                dcv_db[i] = std::max(-80.0, 10.0 * std::log10(v_dcv[i] / (max_dcv + 1e-12) + 1e-12));
-                cbf_db[i] = std::max(-80.0, 10.0 * std::log10(v_cbf[i] / (max_cbf + 1e-12) + 1e-12));
-            }
-
-            QString cbfName = QString("slice_cbf_%1").arg(tid);
-            QCustomPlot* pCbf = m_sliceWidget->findChild<QCustomPlot*>(cbfName);
-            if (!pCbf) {
-                pCbf = new QCustomPlot(m_sliceWidget); pCbf->setObjectName(cbfName); setupPlotInteraction(pCbf);
-                pCbf->setMinimumSize(400, 250); pCbf->addGraph(); pCbf->graph(0)->setPen(QPen(Qt::gray, 2.0));
-                pCbf->plotLayout()->insertRow(0); pCbf->plotLayout()->addElement(0, 0, new QCPTextElement(pCbf, "", QFont("sans", 10, QFont::Bold)));
-                pCbf->xAxis->setRange(m_currentConfig.lofarMin, m_currentConfig.lofarMax); pCbf->yAxis->setRange(-80, 5);
-                pCbf->xAxis->setVisible(false); m_sliceLayout->addWidget(pCbf, 0, col);
-            }
-            pCbf->graph(0)->setData(f_axis, cbf_db);
-            if (auto* title = qobject_cast<QCPTextElement*>(pCbf->plotLayout()->element(0, 0))) title->setText(QString("目标%1 (约 %2°) - CBF").arg(tid).arg(avg_ang, 0, 'f', 1));
-            pCbf->yAxis->setLabel(col == 0 ? "相对功率 / dB" : ""); pCbf->replot(); updatePlotOriginalRange(pCbf);
-
-            QString dcvName = QString("slice_dcv_%1").arg(tid);
-            QCustomPlot* pDcv = m_sliceWidget->findChild<QCustomPlot*>(dcvName);
-            if (!pDcv) {
-                pDcv = new QCustomPlot(m_sliceWidget); pDcv->setObjectName(dcvName); setupPlotInteraction(pDcv);
-                pDcv->setMinimumSize(400, 250); pDcv->addGraph(); pDcv->graph(0)->setPen(QPen(Qt::red, 1.5));
-                pDcv->plotLayout()->insertRow(0); pDcv->plotLayout()->addElement(0, 0, new QCPTextElement(pDcv, "", QFont("sans", 10, QFont::Bold)));
-                pDcv->xAxis->setRange(m_currentConfig.lofarMin, m_currentConfig.lofarMax); pDcv->yAxis->setRange(-80, 5);
-                pDcv->xAxis->setLabel("频率 / Hz"); m_sliceLayout->addWidget(pDcv, 1, col);
-            }
-            pDcv->graph(0)->setData(f_axis, dcv_db);
-
-            // ========================================================
-            // 【新增】：在 DCV 上画出累积提取的蓝点线谱
-            // ========================================================
-            if (pDcv->graphCount() < 2) {
-                pDcv->addGraph();
-                pDcv->graph(1)->setLineStyle(QCPGraph::lsNone);
-                pDcv->graph(1)->setScatterStyle(QCPScatterStyle(QCPScatterStyle::ssCircle, Qt::blue, Qt::white, 6));
-            }
-            QVector<double> peakF, peakA;
-            const TargetTrack* lastTr = nullptr;
-            for(int k=m_historyResults.size()-1; k>=0; --k) {
-                for(const auto& tr : m_historyResults[k].tracks) {
-                    if (tr.id == tid) { lastTr = &tr; break; }
+                if (lastTr && !lastTr->lineSpectraDcv.empty()) {
+                    for(double f : lastTr->lineSpectraDcv) {
+                        int bin = std::round(f / df_calc);
+                        if(bin >= 0 && bin < dcv_db.size()) { peakF.append(f); peakA.append(dcv_db[bin]); }
+                    }
                 }
-                if (lastTr) break;
-            }
-            if (lastTr && !lastTr->lineSpectraDcv.empty()) {
-                for(double f : lastTr->lineSpectraDcv) {
-                    int bin = std::round(f / df_calc);
-                    if(bin >= 0 && bin < dcv_db.size()) { peakF.append(f); peakA.append(dcv_db[bin]); }
-                }
-            }
-            pDcv->graph(1)->setData(peakF, peakA);
-            // ========================================================
+                pDcv->graph(1)->setData(peakF, peakA);
+                // ========================================================
 
-            if (auto* title = qobject_cast<QCPTextElement*>(pDcv->plotLayout()->element(0, 0))) title->setText(QString("目标%1 (约 %2°) - DCV").arg(tid).arg(avg_ang, 0, 'f', 1));
-            pDcv->yAxis->setLabel(col == 0 ? "相对功率 / dB" : ""); pDcv->replot(); updatePlotOriginalRange(pDcv);
+                if (auto* title = qobject_cast<QCPTextElement*>(pDcv->plotLayout()->element(0, 0))) title->setText(QString("目标%1 (约 %2°) - DCV").arg(tid).arg(avg_ang, 0, 'f', 1));
 
-            col++;
-        }
-    }
-}
+                // 【修改点5】：同样显示 Y 轴标签
+                pDcv->yAxis->setLabel("相对功率 / dB");
+                pDcv->replot(); updatePlotOriginalRange(pDcv);
+
+                row++; // 【修改点6】：本目标处理完毕，行数加 1
+            }
+        }}
 
 void MainWindow::onBatchAccuracyComputed(int batchIndex, double accuracy) {
     m_batchAccuracies.append(qMakePair(batchIndex, accuracy));
