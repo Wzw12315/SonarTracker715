@@ -24,6 +24,9 @@
 #include "../core/UdpReceiver.h"
 #include "NotificationWidget.h" // 引入新部件
 #include <QUdpSocket> // 记得包含头文件
+#include <QDockWidget>
+#include <QToolBar>
+
 
 struct PlotLayoutInfo {
     QWidget* originalParent = nullptr;
@@ -86,6 +89,8 @@ private:
     void closePopupsFromLayout(QLayout* targetLayout);
     void createTargetPlots(int targetId);
     void updateTab2Plots();
+    void fixAllPlotTitles();
+
     QWidget* createCardWidget(QLabel* contentLabel, const QString& bgColor, const QString& title);
 
     DspWorker* m_worker;
@@ -151,6 +156,13 @@ private:
     QPlainTextEdit* m_reportConsole;
 
     QTabWidget* m_mainTabWidget;
+    // 用于多屏独立显示的函数和容器
+    void popOutCurrentTab();
+    void restoreTab(QWidget* popupWindow);
+    QMap<QWidget*, QWidget*> m_popupTabs;
+
+
+
     QCustomPlot* m_timeAzimuthPlot;
     QCustomPlot* m_spatialPlot;
     QCPTextElement* m_plotTitle;
@@ -185,10 +197,10 @@ private:
 
     QStringList m_selectedFiles;         // 【意见一】保存多选的文件路径
     QLineEdit* m_editTaskName;           // 【意见六】任务名称修改框
-//    QLabel* m_lblNewTargetAlarm;         // 【意见四】新目标指示灯
+    //    QLabel* m_lblNewTargetAlarm;         // 【意见四】新目标指示灯
     // 【新增】：浮动通知区域的容器与布局
-        QWidget* m_notificationContainer = nullptr;
-        QVBoxLayout* m_notificationLayout = nullptr;
+    QWidget* m_notificationContainer = nullptr;
+    QVBoxLayout* m_notificationLayout = nullptr;
 
     QWidget* m_targetLightsWidget;       // 【意见二】常亮指示灯容器
     QHBoxLayout* m_targetLightsLayout;   // 【意见二】常亮指示灯布局
@@ -207,11 +219,43 @@ private:
     UdpReceiver* m_udpReceiver = nullptr;
 
     QPushButton* m_btnUdpConfig;
-        QString m_udpBindAddress = "0.0.0.0"; // 默认监听所有网卡
-        quint16 m_udpListenPort = 8888;       // 默认端口
+    QString m_udpBindAddress = "0.0.0.0"; // 默认监听所有网卡
+    quint16 m_udpListenPort = 8888;       // 默认端口
 
-        // 【新增】用于向发射端发送控制命令的参数
-            QString m_udpRemoteAddress = "127.0.0.1";
-            quint16 m_udpRemotePort = 8889;
-            QUdpSocket* m_cmdSocket = nullptr; // 命令发送套接字
+    // 【新增】用于向发射端发送控制命令的参数
+    QString m_udpRemoteAddress = "127.0.0.1";
+    quint16 m_udpRemotePort = 8889;
+    QUdpSocket* m_cmdSocket = nullptr; // 命令发送套接字
+
+    // ==========================================
+    // 【新增】：自定义无边框标题栏变量
+    // ==========================================
+    QWidget* m_customTitleBar;
+    QLabel* m_titleLabel;
+    QPushButton* m_btnMinimize;
+    QPushButton* m_btnMaximize;
+    QPushButton* m_btnClose;
+
+    // ==========================================
+        // 【修改】：无边框窗口移动与边缘缩放变量
+        // ==========================================
+        bool m_isDragging = false;
+        QPoint m_dragPosition;
+
+        // 缩放方向枚举
+        enum ResizeDir { NoResize, Top, Bottom, Left, Right, TopLeft, TopRight, BottomLeft, BottomRight };
+        ResizeDir m_resizeDir = NoResize;
+        bool m_isResizing = false;
+        QRect m_resizeStartGeometry;
+        QPoint m_resizeStartPos;
+
+        // 辅助函数
+        ResizeDir getResizeDirection(const QPoint &pos);
+        void updateCursorShape(const QPoint &pos);
+
+    protected:
+        // 重写鼠标事件
+        void mousePressEvent(QMouseEvent *event) override;
+        void mouseMoveEvent(QMouseEvent *event) override;
+        void mouseReleaseEvent(QMouseEvent *event) override;
 };
