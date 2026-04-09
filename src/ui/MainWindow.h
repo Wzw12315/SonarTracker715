@@ -106,6 +106,13 @@ private:
     QMap<int, QCustomPlot*> m_lofarPlots;
     QMap<int, QCustomPlot*> m_demonPlots;
 
+    // ==========================================
+        // 本舰导航信息标签 (演示用)
+        // ==========================================
+        QLabel* m_lblLongitude = nullptr;
+        QLabel* m_lblLatitude = nullptr;
+        QLabel* m_lblHeading = nullptr;
+
     QLineEdit* m_editFs;
     QLineEdit* m_editM;
     QLineEdit* m_editD;

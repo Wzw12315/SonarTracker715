@@ -8,15 +8,14 @@ import numpy as np
 import threading
 
 # ==================== 配置区 ====================
-UDP_IP = "127.0.0.1"  # C++ 数据接收端的 IP
-UDP_PORT = 8888  # C++ 数据接收端的端口
+UDP_IP = "127.0.0.1"
+UDP_PORT = 8888
 CHUNK_SIZE = 51200
 MAGIC_WORD = 0xAA55AA55
 
-LISTEN_IP = "0.0.0.0"  # 本机监听命令的 IP
-LISTEN_PORT = 8889  # 本机监听命令的端口 (C++发指令到这里)
+LISTEN_IP = "0.0.0.0"
+LISTEN_PORT = 8889
 
-# 全局控制标志
 is_running = False
 is_paused = False
 should_exit = False
@@ -42,7 +41,6 @@ for fpath in raw_files:
 sorted_times = sorted(time_to_files.keys())
 
 
-# ==================== 控制指令监听线程 ====================
 def command_listener():
     global is_running, is_paused, should_exit
     listen_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -54,7 +52,6 @@ def command_listener():
             data, addr = listen_sock.recvfrom(1024)
             cmd = data.decode('utf-8').strip()
             print(f"📩 [总控台] 收到远端指令: {cmd}")
-
             if cmd == "CMD:START":
                 is_running = True
                 is_paused = False
@@ -70,7 +67,6 @@ def command_listener():
 
 threading.Thread(target=command_listener, daemon=True).start()
 
-# ==================== 数据发送主循环 ====================
 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 1024 * 1024 * 32)
 
@@ -83,13 +79,9 @@ try:
 
         for frame_idx, t_val in enumerate(sorted_times, start=1):
             if not is_running or should_exit:
-                print("🛑 收到中止指令，停止当前发送序列。")
                 break
-
-            # 暂停逻辑：阻塞卡住，不退出发送循环
             while is_paused and not should_exit and is_running:
                 time.sleep(0.1)
-
             if not is_running: break
 
             files_for_this_frame = time_to_files[t_val]
@@ -107,12 +99,19 @@ try:
             chunks = [frame_bytes[i:i + CHUNK_SIZE] for i in range(0, len(frame_bytes), CHUNK_SIZE)]
             total_chunks = len(chunks)
 
+            # ========================================================
+            # 【新增】：模拟本舰传感器数据，随着帧数增加产生逼真的物理微动
+            # ========================================================
+            sim_lon = 118.395833 + frame_idx * 0.0001  # 约 118°23'45" E (缓慢向东移动)
+            sim_lat = 32.253333 + frame_idx * 0.00005  # 约 32°15'12" N (缓慢向北移动)
+            sim_hdg = 45.5 + frame_idx * 0.05  # 艏向角缓慢右转
+
             for chunk_idx, chunk in enumerate(chunks):
-                header = struct.pack('<IIIII', MAGIC_WORD, frame_idx, chunk_idx, total_chunks, len(chunk))
+                # 格式变为 <IIIIIfff，即 5个无符号整型 + 3个浮点数
+                header = struct.pack('<IIIIIfff', MAGIC_WORD, frame_idx, chunk_idx, total_chunks, len(chunk), sim_lon,
+                                     sim_lat, sim_hdg)
                 sock.sendto(header + chunk, (UDP_IP, UDP_PORT))
                 time.sleep(0.002)
-
-            # time.sleep(1)
 
         if is_running:
             print("\n🎉 当前所有数据帧发送完毕！等待下一轮指令...")

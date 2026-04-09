@@ -58,11 +58,35 @@ void UdpReceiver::run() {
 
                 if (datagram.size() < sizeof(PacketHeader)) continue;
 
-                PacketHeader header;
-                memcpy(&header, datagram.constData(), sizeof(PacketHeader));
+                                PacketHeader header;
+                                memcpy(&header, datagram.constData(), sizeof(PacketHeader));
 
-                // 1. 魔法校验码拦截
-                if (header.magic != 0xAA55AA55) continue;
+                                // 1. 魔法校验码拦截
+                                if (header.magic != 0xAA55AA55) continue;
+
+                                // 【新增】：如果是这帧的第一个分片，解析经纬度并通知主界面
+                                if (header.chunkIdx == 0) {
+                                    auto formatGeo = [](float decimalDeg, bool isLon) -> QString {
+                                        QString dir;
+                                        if (isLon) dir = decimalDeg >= 0 ? "E" : "W";
+                                        else       dir = decimalDeg >= 0 ? "N" : "S";
+                                        decimalDeg = std::abs(decimalDeg);
+                                        int d = (int)decimalDeg;
+                                        int m = (int)((decimalDeg - d) * 60);
+                                        int s = (int)((decimalDeg - d - m / 60.0) * 3600);
+                                        // 保证格式对齐：经度 000°，纬度 00°
+                                        QString dStr = isLon ? QString("%1").arg(d, 3, 10, QChar('0')) : QString("%1").arg(d, 2, 10, QChar('0'));
+                                        QString mStr = QString("%1").arg(m, 2, 10, QChar('0'));
+                                        QString sStr = QString("%1").arg(s, 2, 10, QChar('0'));
+                                        return QString("%1°%2'%3\" %4").arg(dStr).arg(mStr).arg(sStr).arg(dir);
+                                    };
+
+                                    QString lonStr = formatGeo(header.shipLon, true);
+                                    QString latStr = formatGeo(header.shipLat, false);
+                                    QString hdgStr = QString("%1°").arg(header.shipHeading, 5, 'f', 1, QChar('0'));
+
+                                    emit navInfoReceived(lonStr, latStr, hdgStr); // 发送信号
+                                }
 
                 // 2. 跨帧重置：收到新的一帧时，预分配巨大的“纯净画布”
                 if (header.frameIdx != currentFrameIdx) {
