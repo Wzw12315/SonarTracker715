@@ -930,129 +930,250 @@ void MainWindow::onPlotDoubleClick(QMouseEvent *event) {
     plot->replot();
 }
 // 【新增函数】：用于将用户填写的要剔除的ID发送给Worker线程
+
 void MainWindow::onDeleteTargetClicked() {
+
     bool ok;
+
     int targetId = m_editDeleteTargetId->text().toInt(&ok);
+
     if (!ok || targetId <= 0) {
+
         QMessageBox::warning(this, "输入错误", "请输入有效的正整数目标ID！");
+
         return;
+
     }
+
+
 
     if (m_worker && m_worker->isRunning()) {
+
         m_worker->requestRemoveTarget(targetId);
+
         appendLog(QString("\n>> 已发送人工干预指令：系统将在下一帧彻底且永久剔除假目标 ID [%1]\n").arg(targetId));
+
     } else {
+
         appendLog(QString("\n>> 正在全局清理假目标 ID [%1] 的界面图表及所有相关指标...\n").arg(targetId));
+
     }
+
+
 
     // ====== 【清理常亮指示灯】 ======
+
     if (m_targetLights.contains(targetId)) {
+
         QLabel* light = m_targetLights.take(targetId);
+
         m_targetLightsLayout->removeWidget(light);
+
         light->deleteLater();
+
     }
+
+
 
     for (auto& frame : m_historyResults) {
+
         for (int i = frame.tracks.size() - 1; i >= 0; --i) {
+
             if (frame.tracks[i].id == targetId) {
+
                 frame.tracks.removeAt(i);
+
             }
+
         }
+
     }
+
+
 
     // ====== 【安全清理 Tab 1 的图表及外骨骼】 ======
+
     auto removeTab1Plot = [this](QMap<int, QCustomPlot*>& plotMap, int tid) {
+
         if (plotMap.contains(tid)) {
+
             QCustomPlot* p = plotMap.take(tid);
+
             for (auto it = m_popupPlots.begin(); it != m_popupPlots.end(); ++it) {
+
                 if (it.value().first == p) { it.key()->close(); break; }
+
             }
+
             // 【安全修复】：无论图表去哪了，通过名字找出外骨骼并连根拔起
+
             QWidget* wrapper = this->findChild<QWidget*>(p->objectName() + "_wrapper");
+
             if (wrapper) {
+
                 wrapper->hide(); wrapper->deleteLater();
+
             } else {
+
                 p->hide(); p->deleteLater();
+
             }
+
         }
+
     };
+
     removeTab1Plot(m_lsPlots, targetId);
+
     removeTab1Plot(m_lofarPlots, targetId);
+
     removeTab1Plot(m_demonPlots, targetId);
 
+
+
     // ====== 【清理 Tab 2 的切片图表及其外骨骼包装器】 ======
+
     if (m_sliceWidget) {
+
         QList<QString> suffixes = {"cbf", "dcv"};
+
         for (const QString& suf : suffixes) {
+
             QString name = QString("slice_%1_%2").arg(suf).arg(targetId);
+
             if (QCustomPlot* p = m_sliceWidget->findChild<QCustomPlot*>(name)) {
+
                 QWidget* wrapper = p->parentWidget();
+
                 if (wrapper && wrapper->objectName() == p->objectName() + "_wrapper") {
+
                     m_sliceLayout->removeWidget(wrapper);
+
                     wrapper->hide();
+
                     wrapper->deleteLater();
+
                 } else {
+
                     m_sliceLayout->removeWidget(p);
+
                     p->hide();
+
                     p->deleteLater();
+
                 }
+
             }
+
         }
+
     }
+
+
 
     updateTab2Plots();
 
+
+
     // ====== 【清理 Tab 3 的离线瀑布图表及其外骨骼包装器】 ======
+
     if (m_lofarWaterfallWidget) {
+
         QList<QString> prefixes = {"offline_raw", "offline_tpsw", "offline_dp"};
+
         for (const QString& pref : prefixes) {
+
             QString name = QString("%1_%2").arg(pref).arg(targetId);
+
             if (QCustomPlot* p = m_lofarWaterfallWidget->findChild<QCustomPlot*>(name)) {
+
                 QWidget* wrapper = p->parentWidget();
+
                 if (wrapper && wrapper->objectName() == p->objectName() + "_wrapper") {
+
                     m_lofarWaterfallLayout->removeWidget(wrapper);
+
                     wrapper->hide();
+
                     wrapper->deleteLater();
+
                 } else {
+
                     m_lofarWaterfallLayout->removeWidget(p);
+
                     p->hide();
+
                     p->deleteLater();
+
                 }
+
             }
+
         }
+
     }
+
+
 
     // ====== 【清理表格与特征曲线】 ======
+
     if (m_tableTargetFeatures) {
+
         for (int r = 0; r < m_tableTargetFeatures->rowCount(); ++r) {
+
             QTableWidgetItem* item = m_tableTargetFeatures->item(r, 0);
+
             if (item && item->text() == QString("Target %1").arg(targetId)) {
+
                 m_tableTargetFeatures->removeRow(r);
+
                 break;
+
             }
+
         }
+
     }
+
+
 
     if (m_calcAzimuthGraphs.contains(targetId)) {
+
         m_plotCalcAzimuth->removeGraph(m_calcAzimuthGraphs.take(targetId));
+
         m_plotCalcAzimuth->replot();
+
     }
+
     if (m_trueAzimuthGraphs.contains(targetId)) {
+
         m_plotTrueAzimuth->removeGraph(m_trueAzimuthGraphs.take(targetId));
+
         m_plotTrueAzimuth->replot();
+
     }
+
+
 
     QSet<int> unique_tids;
+
     for (const auto& frame : m_historyResults) {
+
         for (const auto& t : frame.tracks) {
+
             if (t.isConfirmed) unique_tids.insert(t.id);
+
         }
+
     }
+
     m_lblStatTargets->setText(QString("<span style='font-size:36px; color:#2980b9;'>%1</span> 艘").arg(unique_tids.size()));
 
-    m_editDeleteTargetId->clear();
-}
 
+
+    m_editDeleteTargetId->clear();
+
+}
 
 void MainWindow::onStartClicked() {
     // 【修改】：如果不是 UDP 模式，才需要检查文件是否为空
@@ -1782,15 +1903,15 @@ void MainWindow::setupUi() {
         QHBoxLayout* tab1HeaderLayout = new QHBoxLayout(tab1Header);
         tab1HeaderLayout->setContentsMargins(0, 10, 15, 5);
 
-        QLabel* lblLs = new QLabel("🎯 瞬时滤波线谱 (LS)", tab1Header);
+        QLabel* lblLs = new QLabel("瞬时滤波线谱", tab1Header);
         lblLs->setAlignment(Qt::AlignCenter);
         lblLs->setStyleSheet("QLabel { background-color: rgba(231, 76, 60, 0.15); color: #ff7675; font-weight: bold; font-size: 13px; padding: 6px; border-radius: 4px; border: 1px solid #d63031; }");
 
-        QLabel* lblLofar = new QLabel("🌊 LOFAR 谱历程", tab1Header);
+        QLabel* lblLofar = new QLabel("瞬时LOFAR谱", tab1Header);
         lblLofar->setAlignment(Qt::AlignCenter);
         lblLofar->setStyleSheet("QLabel { background-color: rgba(52, 152, 219, 0.15); color: #74b9ff; font-weight: bold; font-size: 13px; padding: 6px; border-radius: 4px; border: 1px solid #2980b9; }");
 
-        QLabel* lblDemon = new QLabel("🔊 DEMON 轴频包络", tab1Header);
+        QLabel* lblDemon = new QLabel("DEMON 轴频包络", tab1Header);
         lblDemon->setAlignment(Qt::AlignCenter);
         lblDemon->setStyleSheet("QLabel { background-color: rgba(46, 204, 113, 0.15); color: #55efc4; font-weight: bold; font-size: 13px; padding: 6px; border-radius: 4px; border: 1px solid #27ae60; }");
 
@@ -1835,10 +1956,12 @@ void MainWindow::setupUi() {
         cbfColLayout->setContentsMargins(0, 0, 0, 0);
 
         QComboBox* cmbCbfColor = new QComboBox(cbfColWidget);
-        cmbCbfColor->setObjectName("cmbColorTab2_CBF");
-        cmbCbfColor->addItems({"🌈 经典热力 (Jet)", "🔥 高温火焰 (Hot)", "🌌 医疗伪影 (Thermal)", "⚫ 灰度声图 (Grayscale)", "❄️ 极寒冷色 (Polar)"});
-        cmbCbfColor->setStyleSheet("QComboBox { background-color: #1a1a1a; color: #3498db; border: 1px solid #2980b9; font-weight: bold; border-radius: 4px; padding: 4px; }");
-        cbfColLayout->addWidget(cmbCbfColor);
+            cmbCbfColor->setObjectName("cmbColorTab2_CBF");
+            // 【意见一修改】：精简文本，与 Tab 3 保持一致
+            cmbCbfColor->addItems({"🌈 CBF 风格: Jet", "🔥 CBF 风格: Hot", "🌌 CBF 风格: Thermal", "⚫ CBF 风格: Grayscale", "❄️ CBF 风格: Polar"});
+            // 【意见二修改】：将 CBF 下拉框的颜色改为与底部切片标题一致的亮青色 (#00cec9)
+            cmbCbfColor->setStyleSheet("QComboBox { background-color: #1a1a1a; color: #00cec9; border: 1px solid #00cec9; font-weight: bold; border-radius: 4px; padding: 4px; }");
+            cbfColLayout->addWidget(cmbCbfColor);
 
         m_cbfWaterfallPlot = new QCustomPlot(cbfColWidget);
         m_cbfWaterfallPlot->setObjectName("cbfWaterfallPlot");
@@ -1862,10 +1985,12 @@ void MainWindow::setupUi() {
         dcvColLayout->setContentsMargins(0, 0, 0, 0);
 
         QComboBox* cmbDcvColor = new QComboBox(dcvColWidget);
-        cmbDcvColor->setObjectName("cmbColorTab2_DCV");
-        cmbDcvColor->addItems({"🌈 经典热力 (Jet)", "🔥 高温火焰 (Hot)", "🌌 医疗伪影 (Thermal)", "⚫ 灰度声图 (Grayscale)", "❄️ 极寒冷色 (Polar)"});
-        cmbDcvColor->setStyleSheet("QComboBox { background-color: #1a1a1a; color: #e74c3c; border: 1px solid #c0392b; font-weight: bold; border-radius: 4px; padding: 4px; }");
-        dcvColLayout->addWidget(cmbDcvColor);
+            cmbDcvColor->setObjectName("cmbColorTab2_DCV");
+            // 【意见一修改】：精简文本
+            cmbDcvColor->addItems({"🌈 DCV 风格: Jet", "🔥 DCV 风格: Hot", "🌌 DCV 风格: Thermal", "⚫ DCV 风格: Grayscale", "❄️ DCV 风格: Polar"});
+            // 【意见二修改】：DCV 保持红色系，稍微提亮边框 (#e74c3c) 以匹配底部切片标题
+            cmbDcvColor->setStyleSheet("QComboBox { background-color: #1a1a1a; color: #ff7675; border: 1px solid #d63031; font-weight: bold; border-radius: 4px; padding: 4px; }");
+            dcvColLayout->addWidget(cmbDcvColor);
 
         m_dcvWaterfallPlot = new QCustomPlot(dcvColWidget);
         m_dcvWaterfallPlot->setObjectName("dcvWaterfallPlot");
@@ -1894,7 +2019,7 @@ void MainWindow::setupUi() {
         QHBoxLayout* tab2SliceHeaderLayout = new QHBoxLayout(tab2SliceHeader);
         tab2SliceHeaderLayout->setContentsMargins(0, 15, 0, 5);
 
-        QLabel* lblCbfSlice = new QLabel("✂️ 常规波束 (CBF) 方位切片跟踪", tab2SliceHeader);
+        QLabel* lblCbfSlice = new QLabel("常规波束 (CBF) 方位切片跟踪", tab2SliceHeader);
         lblCbfSlice->setAlignment(Qt::AlignCenter);
         // 修改 Tab 2 CBF 切片标签样式：由灰色改为醒目的青色系
         lblCbfSlice->setStyleSheet("QLabel { "
@@ -1907,7 +2032,7 @@ void MainWindow::setupUi() {
                                    "border: 1px solid #00cec9; "                 // 边框改为亮青色，取代原有的灰色 (#7f8c8d)
                                    "}");
 
-        QLabel* lblDcvSlice = new QLabel("✂️ 高分辨 (DCV) 方位切片跟踪", tab2SliceHeader);
+        QLabel* lblDcvSlice = new QLabel("高分辨 (DCV) 方位切片跟踪", tab2SliceHeader);
         lblDcvSlice->setAlignment(Qt::AlignCenter);
         lblDcvSlice->setStyleSheet("QLabel { background-color: rgba(231, 76, 60, 0.15); color: #ff7675; font-weight: bold; font-size: 13px; padding: 6px; border-radius: 4px; border: 1px solid #d63031; }");
 
@@ -1939,15 +2064,15 @@ void MainWindow::setupUi() {
         QHBoxLayout* tab3HeaderLayout = new QHBoxLayout(tab3HeaderBar);
         tab3HeaderLayout->setContentsMargins(0, 10, 15, 0);
 
-        QLabel* lblRaw = new QLabel("📊 原始 LOFAR 谱 (RAW)", tab3HeaderBar);
+        QLabel* lblRaw = new QLabel("原始 LOFAR 谱 (RAW)", tab3HeaderBar);
         lblRaw->setAlignment(Qt::AlignCenter);
         lblRaw->setStyleSheet("QLabel { background-color: rgba(155, 89, 182, 0.15); color: #a29bfe; font-weight: bold; font-size: 13px; padding: 6px; border-radius: 4px; border: 1px solid #8e44ad; }");
 
-        QLabel* lblTpsw = new QLabel("🎛️ TPSW 背景均衡", tab3HeaderBar);
+        QLabel* lblTpsw = new QLabel("TPSW 背景均衡", tab3HeaderBar);
         lblTpsw->setAlignment(Qt::AlignCenter);
         lblTpsw->setStyleSheet("QLabel { background-color: rgba(52, 152, 219, 0.15); color: #74b9ff; font-weight: bold; font-size: 13px; padding: 6px; border-radius: 4px; border: 1px solid #2980b9; }");
 
-        QLabel* lblDp = new QLabel("📈 DP 线谱寻优", tab3HeaderBar);
+        QLabel* lblDp = new QLabel("DP 线谱寻优", tab3HeaderBar);
         lblDp->setAlignment(Qt::AlignCenter);
         lblDp->setStyleSheet("QLabel { background-color: rgba(230, 126, 34, 0.15); color: #fab1a0; font-weight: bold; font-size: 13px; padding: 6px; border-radius: 4px; border: 1px solid #d35400; }");
 
@@ -1962,16 +2087,21 @@ void MainWindow::setupUi() {
         QHBoxLayout* tab3ControlLayout = new QHBoxLayout(tab3ControlBar);
         tab3ControlLayout->setContentsMargins(0, 5, 15, 5);
 
-        QString cmbStyle = "QComboBox { background-color: #1a1a1a; color: #f1c40f; border: 1px solid #f39c12; font-weight: bold; border-radius: 4px; padding: 4px; }";
+        // 【意见二修改】：废弃统一的黄色样式，为三个下拉框分别定制专属色彩
+            QComboBox* cmbRaw = new QComboBox(tab3ControlBar); cmbRaw->setObjectName("cmbColorTab3_RAW");
+            cmbRaw->addItems({"🌈 RAW 风格: Jet", "🔥 RAW 风格: Hot", "🌌 RAW 风格: Thermal", "⚫ RAW 风格: Grayscale", "❄️ RAW 风格: Polar"});
+            // 对应 RAW 标题的紫色 (#a29bfe)
+            cmbRaw->setStyleSheet("QComboBox { background-color: #1a1a1a; color: #a29bfe; border: 1px solid #8e44ad; font-weight: bold; border-radius: 4px; padding: 4px; }");
 
-        QComboBox* cmbRaw = new QComboBox(tab3ControlBar); cmbRaw->setObjectName("cmbColorTab3_RAW");
-        cmbRaw->addItems({"🌈 RAW 风格: Jet", "🔥 RAW 风格: Hot", "🌌 RAW 风格: Thermal", "⚫ RAW 风格: Grayscale", "❄️ RAW 风格: Polar"}); cmbRaw->setStyleSheet(cmbStyle);
+            QComboBox* cmbTpsw = new QComboBox(tab3ControlBar); cmbTpsw->setObjectName("cmbColorTab3_TPSW");
+            cmbTpsw->addItems({"🌈 TPSW 风格: Jet", "🔥 TPSW 风格: Hot", "🌌 TPSW 风格: Thermal", "⚫ TPSW 风格: Grayscale", "❄️ TPSW 风格: Polar"});
+            // 对应 TPSW 标题的蓝色 (#74b9ff)
+            cmbTpsw->setStyleSheet("QComboBox { background-color: #1a1a1a; color: #74b9ff; border: 1px solid #2980b9; font-weight: bold; border-radius: 4px; padding: 4px; }");
 
-        QComboBox* cmbTpsw = new QComboBox(tab3ControlBar); cmbTpsw->setObjectName("cmbColorTab3_TPSW");
-        cmbTpsw->addItems({"🌈 TPSW 风格: Jet", "🔥 TPSW 风格: Hot", "🌌 TPSW 风格: Thermal", "⚫ TPSW 风格: Grayscale", "❄️ TPSW 风格: Polar"}); cmbTpsw->setStyleSheet(cmbStyle);
-
-        QComboBox* cmbDp = new QComboBox(tab3ControlBar); cmbDp->setObjectName("cmbColorTab3_DP");
-        cmbDp->addItems({"🌈 DP 风格: Jet", "🔥 DP 风格: Hot", "🌌 DP 风格: Thermal", "⚫ DP 风格: Grayscale", "❄️ DP 风格: Polar"}); cmbDp->setStyleSheet(cmbStyle);
+            QComboBox* cmbDp = new QComboBox(tab3ControlBar); cmbDp->setObjectName("cmbColorTab3_DP");
+            cmbDp->addItems({"🌈 DP 风格: Jet", "🔥 DP 风格: Hot", "🌌 DP 风格: Thermal", "⚫ DP 风格: Grayscale", "❄️ DP 风格: Polar"});
+            // 对应 DP 标题的橙色 (#fab1a0)
+            cmbDp->setStyleSheet("QComboBox { background-color: #1a1a1a; color: #fab1a0; border: 1px solid #d35400; font-weight: bold; border-radius: 4px; padding: 4px; }");
 
         tab3ControlLayout->addWidget(cmbRaw);
         tab3ControlLayout->addWidget(cmbTpsw);
@@ -1979,25 +2109,28 @@ void MainWindow::setupUi() {
         tab3ControlLayout->setStretch(0, 1); tab3ControlLayout->setStretch(1, 1); tab3ControlLayout->setStretch(2, 1);
         tab3Layout->addWidget(tab3ControlBar);
 
-        auto connectTab3Combo = [this](QComboBox* cmb, const QString& prefix) {
-            connect(cmb, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this, prefix](int index){
-                QCPColorGradient grad = QCPColorGradient::gpJet;
-                if(index==1) grad = QCPColorGradient::gpHot; else if(index==2) grad = QCPColorGradient::gpThermal; else if(index==3) grad = QCPColorGradient::gpGrayscale; else if(index==4) grad = QCPColorGradient::gpPolar;
-                if (m_lofarWaterfallWidget) {
-                    for (QCustomPlot* p : m_lofarWaterfallWidget->findChildren<QCustomPlot*>()) {
-                        if (p->objectName().startsWith(prefix)) {
-                            if (p->plottableCount() > 0) {
-                                qobject_cast<QCPColorMap*>(p->plottable(0))->setGradient(grad);
-                                p->replot();
+        // 【完美优化】：全局穿透更新样式，哪怕图表被弹出了，依然能丝滑变色，且绝不闪退！
+            auto connectTab3Combo = [this](QComboBox* cmb, const QString& prefix) {
+                connect(cmb, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this, prefix](int index){
+                    QCPColorGradient grad = QCPColorGradient::gpJet;
+                    if(index==1) grad = QCPColorGradient::gpHot; else if(index==2) grad = QCPColorGradient::gpThermal; else if(index==3) grad = QCPColorGradient::gpGrayscale; else if(index==4) grad = QCPColorGradient::gpPolar;
+
+                    // 全局扫描：遍历包括主窗口和所有独立弹窗在内的大网
+                    for (QWidget* w : QApplication::topLevelWidgets()) {
+                        for (QCustomPlot* p : w->findChildren<QCustomPlot*>()) {
+                            if (p->objectName().startsWith(prefix) && p->plottableCount() > 0) {
+                                if (auto* cmap = qobject_cast<QCPColorMap*>(p->plottable(0))) {
+                                    cmap->setGradient(grad);
+                                    p->replot();
+                                }
                             }
                         }
                     }
-                }
-            });
-        };
-        connectTab3Combo(cmbRaw, "offline_raw_");
-        connectTab3Combo(cmbTpsw, "offline_tpsw_");
-        connectTab3Combo(cmbDp, "offline_dp_");
+                });
+            };
+            connectTab3Combo(cmbRaw, "offline_raw_");
+            connectTab3Combo(cmbTpsw, "offline_tpsw_");
+            connectTab3Combo(cmbDp, "offline_dp_");
 
         QScrollArea* lofarScroll = new QScrollArea(tab3);
         lofarScroll->setObjectName("scrollTab3"); // 【新增户口】
@@ -2815,58 +2948,137 @@ void MainWindow::appendReport(const QString& report) {
 void MainWindow::onOfflineResultsReady(const QList<OfflineTargetResult>& results) {
     if (results.isEmpty()) return;
 
-    closePopupsFromLayout(m_lofarWaterfallLayout);
-    QLayoutItem* item;
-    while ((item = m_lofarWaterfallLayout->takeAt(0)) != nullptr) {
-        if (item->widget()) delete item->widget();
-        delete item;
+    // ========================================================
+    // 【新增安全防线】：全局搜索图表和包装器，防止弹窗后触发“克隆 Bug”
+    // ========================================================
+    auto findGlobalPlot = [](const QString& name) -> QCustomPlot* {
+        for (QWidget* w : QApplication::topLevelWidgets()) {
+            if (QCustomPlot* p = w->findChild<QCustomPlot*>(name)) {
+                return p;
+            }
+        }
+        return nullptr;
+    };
+
+    auto findGlobalWidget = [](const QString& name) -> QWidget* {
+        for (QWidget* w : QApplication::topLevelWidgets()) {
+            if (QWidget* widget = w->findChild<QWidget*>(name)) {
+                return widget;
+            }
+        }
+        return nullptr;
+    };
+
+    // ========================================================
+    // 【步骤 1】：收集当前批次有效的目标 ID
+    // ========================================================
+    QSet<int> validTargetIds;
+    for (const auto& res : results) validTargetIds.insert(res.targetId);
+
+    // ========================================================
+    // 【步骤 2】：安全防线 - 仅销毁已经失效（被剔除）的目标图表
+    // ========================================================
+    QList<QCustomPlot*> allOfflinePlots;
+    for (QWidget* w : QApplication::topLevelWidgets()) {
+        for (QCustomPlot* p : w->findChildren<QCustomPlot*>()) {
+            if (p->objectName().startsWith("offline_")) {
+                allOfflinePlots.append(p);
+            }
+        }
     }
 
-    // 获取当前下拉框的布局模式状态
-    QComboBox* cmbLayout = this->findChild<QComboBox*>("cmbLayoutMode");
-    int minHeight = (cmbLayout && cmbLayout->currentIndex() == 1) ? 0 : 250;
+    // 先关闭失效图表的独立弹窗
+    for (QCustomPlot* plot : allOfflinePlots) {
+        int tid = plot->objectName().split("_").last().toInt();
+        if (!validTargetIds.contains(tid)) {
+            QWidget* parentWin = plot->window();
+            if (parentWin != this) parentWin->close();
+        }
+    }
+    QCoreApplication::processEvents();
 
-    // 【终极修复】：辅助获取 Tab3 三列专属色棒风格的 Lambda 函数，增加多屏穿透能力
+    // 再安全销毁失效图表的外骨骼 (【修改点】：使用全局查找)
+    for (QCustomPlot* plot : allOfflinePlots) {
+        int tid = plot->objectName().split("_").last().toInt();
+        if (!validTargetIds.contains(tid)) {
+            QWidget* wrapper = findGlobalWidget(plot->objectName() + "_wrapper");
+            if (wrapper) { wrapper->hide(); wrapper->deleteLater(); }
+            else { plot->hide(); plot->deleteLater(); }
+        }
+    }
+
+    // ========================================================
+    // 【步骤 3】：柔性清空布局，但绝不销毁存活的 Widget
+    // ========================================================
+    QLayoutItem* item;
+    while ((item = m_lofarWaterfallLayout->takeAt(0)) != nullptr) {
+        delete item; // 仅解除绑定，Widget依然存活，无论是乖乖待在主界面还是在弹窗里！
+    }
+
+    // 获取外观设置
+    QComboBox* cmbLayout = this->findChild<QComboBox*>("cmbLayoutMode");
+    bool isAutoFit = (cmbLayout && cmbLayout->currentIndex() == 1);
+    int minHeight = isAutoFit ? 0 : 250;
+
     auto getGrad = [this](const QString& objName) -> QCPColorGradient {
         QComboBox* cmb = nullptr;
         for (QWidget* widget : QApplication::topLevelWidgets()) {
             cmb = widget->findChild<QComboBox*>(objName);
             if (cmb) break;
         }
-
         if (!cmb) return QCPColorGradient::gpJet;
-
         int idx = cmb->currentIndex();
-        if(idx == 1) return QCPColorGradient::gpHot;
-        if(idx == 2) return QCPColorGradient::gpThermal;
-        if(idx == 3) return QCPColorGradient::gpGrayscale;
-        if(idx == 4) return QCPColorGradient::gpPolar;
+        if(idx == 1) return QCPColorGradient::gpHot; else if(idx == 2) return QCPColorGradient::gpThermal;
+        else if(idx == 3) return QCPColorGradient::gpGrayscale; else if(idx == 4) return QCPColorGradient::gpPolar;
         return QCPColorGradient::gpJet;
     };
 
-    // 获取当前三列分别选中的颜色梯度
     QCPColorGradient gradRaw = getGrad("cmbColorTab3_RAW");
     QCPColorGradient gradTpsw = getGrad("cmbColorTab3_TPSW");
     QCPColorGradient gradDp = getGrad("cmbColorTab3_DP");
 
-    int row = 0; // 将 col 改为 row
+    // ========================================================
+    // 【步骤 4】：局部热更新 (核心黑科技)
+    // 如果图表存在（无论是在原位还是弹窗中），仅更新其数据；不存在则创建。
+    // ========================================================
+    int row = 0;
     for (const auto& res : results) {
-        // ==================== 1. RAW 图表构建 ====================
-        QCustomPlot* pRaw = new QCustomPlot(m_lofarWaterfallWidget);
-        pRaw->setObjectName(QString("offline_raw_%1").arg(res.targetId));
-        setupPlotInteraction(pRaw);
+        int tid = res.targetId;
 
-        // 【核心修复】：为 RAW 图表套上外骨骼包装器！
-        QWidget* wRaw = wrapPlotWithRangeControl(pRaw, "聚焦频段(Hz):", 0, m_currentConfig.fs/2.0, res.displayFreqMin, res.displayFreqMax);
-        wRaw->setMinimumSize(0, minHeight);
-        m_lofarWaterfallLayout->addWidget(wRaw, row, 0);
+        // ------------------------- 1. RAW 图表 -------------------------
+        QString rawName = QString("offline_raw_%1").arg(tid);
+        // 【核心修复】：替代原本的 this->findChild，使用全局穿透雷达！
+        QCustomPlot* pRaw = findGlobalPlot(rawName);
 
-        pRaw->plotLayout()->insertRow(0);
-        QCPTextElement* titleRaw = new QCPTextElement(pRaw, QString("目标%1 原始LOFAR谱 (随批次积累)").arg(res.targetId), QFont("sans", 10, QFont::Bold));
-        titleRaw->setTextColor(QColor("#dcdde1"));
-        pRaw->plotLayout()->addElement(0, 0, titleRaw);
+        if (!pRaw) {
+            // 从未创建过，初次生成
+            pRaw = new QCustomPlot(m_lofarWaterfallWidget);
+            pRaw->setObjectName(rawName);
+            setupPlotInteraction(pRaw);
+            pRaw->setMinimumSize(0, minHeight);
 
-        QCPColorMap *cmapRaw = new QCPColorMap(pRaw->xAxis, pRaw->yAxis);
+            pRaw->plotLayout()->insertRow(0);
+            QCPTextElement* titleRaw = new QCPTextElement(pRaw, QString("目标%1 原始LOFAR谱 (随批次积累)").arg(tid), QFont("sans", 10, QFont::Bold));
+            titleRaw->setTextColor(QColor("#dcdde1"));
+            pRaw->plotLayout()->addElement(0, 0, titleRaw);
+
+            QWidget* wRaw = wrapPlotWithRangeControl(pRaw, "聚焦频段(Hz):", 0, m_currentConfig.fs/2.0, res.displayFreqMin, res.displayFreqMax);
+            wRaw->setMinimumSize(0, isAutoFit ? 0 : minHeight + 30);
+            m_lofarWaterfallLayout->addWidget(wRaw, row, 0);
+        } else {
+            // 已存在！判断它的外骨骼是否还在主界面，如果是，重新加回网格；如果被弹出了，就不管它。
+            // 【核心修复】：外骨骼也必须用全局穿透雷达来找！
+            QWidget* wRaw = findGlobalWidget(rawName + "_wrapper");
+            if (wRaw && wRaw->parentWidget() == m_lofarWaterfallWidget) {
+                m_lofarWaterfallLayout->addWidget(wRaw, row, 0);
+            }
+        }
+
+        // 热更新 RAW 数据
+        QCPColorMap *cmapRaw = nullptr;
+        if (pRaw->plottableCount() > 0) cmapRaw = qobject_cast<QCPColorMap*>(pRaw->plottable(0));
+        if (!cmapRaw) cmapRaw = new QCPColorMap(pRaw->xAxis, pRaw->yAxis);
+
         cmapRaw->data()->setSize(res.freqBins, res.timeFrames);
         cmapRaw->data()->setRange(QCPRange(0, m_currentConfig.fs/2.0), QCPRange(res.minTime, res.maxTime));
         double rmax = -999;
@@ -2875,33 +3087,45 @@ void MainWindow::onOfflineResultsReady(const QList<OfflineTargetResult>& results
             for(int f=0; f<res.freqBins; ++f)
                 cmapRaw->data()->setCell(f, t, res.rawLofarDb[t * res.freqBins + f] - rmax);
 
-        cmapRaw->setGradient(gradRaw);
-        cmapRaw->setInterpolate(true);
+        cmapRaw->setGradient(gradRaw); cmapRaw->setInterpolate(true);
         cmapRaw->setDataRange(QCPRange(-40.0, 0)); cmapRaw->setTightBoundary(true);
         pRaw->xAxis->setLabel("频率/Hz"); pRaw->yAxis->setLabel("物理时间/s");
-        // pRaw->xAxis->setRange(res.displayFreqMin, res.displayFreqMax); // 交给包装器控制
         pRaw->yAxis->setRange(res.minTime, res.maxTime);
         updatePlotOriginalRange(pRaw);
+        pRaw->replot(); // 无论图表在哪（包括独立弹窗），画面都会在此刻瞬间刷新！
 
-        // ==================== 2. TPSW 图表构建 ====================
-        QCustomPlot* pTpsw = new QCustomPlot(m_lofarWaterfallWidget);
-        pTpsw->setObjectName(QString("offline_tpsw_%1").arg(res.targetId));
-        setupPlotInteraction(pTpsw);
+        // ------------------------- 2. TPSW 图表 -------------------------
+        QString tpswName = QString("offline_tpsw_%1").arg(tid);
+        QCustomPlot* pTpsw = findGlobalPlot(tpswName); // 【核心修复】
 
-        // 【核心修复】：为 TPSW 图表套上外骨骼包装器！
-        QWidget* wTpsw = wrapPlotWithRangeControl(pTpsw, "聚焦频段(Hz):", 0, m_currentConfig.fs/2.0, res.displayFreqMin, res.displayFreqMax);
-        wTpsw->setMinimumSize(0, minHeight);
-        m_lofarWaterfallLayout->addWidget(wTpsw, row, 1);
+        if (!pTpsw) {
+            pTpsw = new QCustomPlot(m_lofarWaterfallWidget);
+            pTpsw->setObjectName(tpswName);
+            setupPlotInteraction(pTpsw);
+            pTpsw->setMinimumSize(0, minHeight);
 
-        pTpsw->plotLayout()->insertRow(0);
-        QCPTextElement* titleTpsw = new QCPTextElement(pTpsw, QString("目标%1 历史LOFAR谱 (TPSW背景均衡)").arg(res.targetId), QFont("sans", 10, QFont::Bold));
-        titleTpsw->setTextColor(QColor("#dcdde1"));
-        pTpsw->plotLayout()->addElement(0, 0, titleTpsw);
+            pTpsw->plotLayout()->insertRow(0);
+            QCPTextElement* titleTpsw = new QCPTextElement(pTpsw, QString("目标%1 历史LOFAR谱 (TPSW背景均衡)").arg(tid), QFont("sans", 10, QFont::Bold));
+            titleTpsw->setTextColor(QColor("#dcdde1"));
+            pTpsw->plotLayout()->addElement(0, 0, titleTpsw);
 
-        QCPColorMap *cmapTpsw = new QCPColorMap(pTpsw->xAxis, pTpsw->yAxis);
+            QWidget* wTpsw = wrapPlotWithRangeControl(pTpsw, "聚焦频段(Hz):", 0, m_currentConfig.fs/2.0, res.displayFreqMin, res.displayFreqMax);
+            wTpsw->setMinimumSize(0, isAutoFit ? 0 : minHeight + 30);
+            m_lofarWaterfallLayout->addWidget(wTpsw, row, 1);
+        } else {
+            QWidget* wTpsw = findGlobalWidget(tpswName + "_wrapper"); // 【核心修复】
+            if (wTpsw && wTpsw->parentWidget() == m_lofarWaterfallWidget) {
+                m_lofarWaterfallLayout->addWidget(wTpsw, row, 1);
+            }
+        }
+
+        // 热更新 TPSW 数据
+        QCPColorMap *cmapTpsw = nullptr;
+        if (pTpsw->plottableCount() > 0) cmapTpsw = qobject_cast<QCPColorMap*>(pTpsw->plottable(0));
+        if (!cmapTpsw) cmapTpsw = new QCPColorMap(pTpsw->xAxis, pTpsw->yAxis);
+
         cmapTpsw->data()->setSize(res.freqBins, res.timeFrames);
         cmapTpsw->data()->setRange(QCPRange(0, m_currentConfig.fs/2.0), QCPRange(res.minTime, res.maxTime));
-
         double tpswMaxVal = -9999.0;
         for(int t=0; t<res.timeFrames; ++t) {
             for(int f=0; f<res.freqBins; ++f) {
@@ -2910,53 +3134,58 @@ void MainWindow::onOfflineResultsReady(const QList<OfflineTargetResult>& results
                 if (val > tpswMaxVal) tpswMaxVal = val;
             }
         }
-
-        cmapTpsw->setGradient(gradTpsw);
-        cmapTpsw->setInterpolate(true);
-
+        cmapTpsw->setGradient(gradTpsw); cmapTpsw->setInterpolate(true);
         double lowerBound = (tpswMaxVal > 15.0) ? (tpswMaxVal - 10.0) : 3.0;
-
-        cmapTpsw->setDataRange(QCPRange(lowerBound, tpswMaxVal));
-        cmapTpsw->setTightBoundary(true);
-
+        cmapTpsw->setDataRange(QCPRange(lowerBound, tpswMaxVal)); cmapTpsw->setTightBoundary(true);
         pTpsw->xAxis->setLabel("频率/Hz"); pTpsw->yAxis->setLabel("物理时间/s");
-        // pTpsw->xAxis->setRange(res.displayFreqMin, res.displayFreqMax); // 交给包装器控制
         pTpsw->yAxis->setRange(res.minTime, res.maxTime);
         updatePlotOriginalRange(pTpsw);
+        pTpsw->replot();
 
-        // ==================== 3. DP 图表构建 ====================
-        QCustomPlot* pDp = new QCustomPlot(m_lofarWaterfallWidget);
-        pDp->setObjectName(QString("offline_dp_%1").arg(res.targetId));
-        setupPlotInteraction(pDp);
+        // ------------------------- 3. DP 图表 -------------------------
+        QString dpName = QString("offline_dp_%1").arg(tid);
+        QCustomPlot* pDp = findGlobalPlot(dpName); // 【核心修复】
 
-        // 【核心修复】：为 DP 图表套上外骨骼包装器！
-        QWidget* wDp = wrapPlotWithRangeControl(pDp, "聚焦频段(Hz):", 0, m_currentConfig.fs/2.0, res.displayFreqMin, res.displayFreqMax);
-        wDp->setMinimumSize(0, minHeight);
-        m_lofarWaterfallLayout->addWidget(wDp, row, 2);
+        if (!pDp) {
+            pDp = new QCustomPlot(m_lofarWaterfallWidget);
+            pDp->setObjectName(dpName);
+            setupPlotInteraction(pDp);
+            pDp->setMinimumSize(0, minHeight);
 
-        pDp->plotLayout()->insertRow(0);
-        QCPTextElement* titleDp = new QCPTextElement(pDp, QString("目标%1 专属线谱连续轨迹图 (DP寻优)").arg(res.targetId), QFont("sans", 10, QFont::Bold));
-        titleDp->setTextColor(QColor("#dcdde1"));
-        pDp->plotLayout()->addElement(0, 0, titleDp);
+            pDp->plotLayout()->insertRow(0);
+            QCPTextElement* titleDp = new QCPTextElement(pDp, QString("目标%1 专属线谱连续轨迹图 (DP寻优)").arg(tid), QFont("sans", 10, QFont::Bold));
+            titleDp->setTextColor(QColor("#dcdde1"));
+            pDp->plotLayout()->addElement(0, 0, titleDp);
 
-        QCPColorMap *cmapDp = new QCPColorMap(pDp->xAxis, pDp->yAxis);
+            QWidget* wDp = wrapPlotWithRangeControl(pDp, "聚焦频段(Hz):", 0, m_currentConfig.fs/2.0, res.displayFreqMin, res.displayFreqMax);
+            wDp->setMinimumSize(0, isAutoFit ? 0 : minHeight + 30);
+            m_lofarWaterfallLayout->addWidget(wDp, row, 2);
+        } else {
+            QWidget* wDp = findGlobalWidget(dpName + "_wrapper"); // 【核心修复】
+            if (wDp && wDp->parentWidget() == m_lofarWaterfallWidget) {
+                m_lofarWaterfallLayout->addWidget(wDp, row, 2);
+            }
+        }
+
+        // 热更新 DP 数据
+        QCPColorMap *cmapDp = nullptr;
+        if (pDp->plottableCount() > 0) cmapDp = qobject_cast<QCPColorMap*>(pDp->plottable(0));
+        if (!cmapDp) cmapDp = new QCPColorMap(pDp->xAxis, pDp->yAxis);
+
         cmapDp->data()->setSize(res.freqBins, res.timeFrames);
         cmapDp->data()->setRange(QCPRange(0, m_currentConfig.fs/2.0), QCPRange(res.minTime, res.maxTime));
         for(int t=0; t<res.timeFrames; ++t)
             for(int f=0; f<res.freqBins; ++f)
                 cmapDp->data()->setCell(f, t, res.dpCounter[t * res.freqBins + f]);
 
-        cmapDp->setGradient(gradDp);
-        cmapDp->setInterpolate(true);
-        cmapDp->setDataRange(QCPRange(0, 10));
-        cmapDp->setTightBoundary(true);
-
+        cmapDp->setGradient(gradDp); cmapDp->setInterpolate(true);
+        cmapDp->setDataRange(QCPRange(0, 10)); cmapDp->setTightBoundary(true);
         pDp->xAxis->setLabel("频率/Hz"); pDp->yAxis->setLabel("物理时间/s");
-        // pDp->xAxis->setRange(res.displayFreqMin, res.displayFreqMax); // 交给包装器控制
         pDp->yAxis->setRange(res.minTime, res.maxTime);
         updatePlotOriginalRange(pDp);
+        pDp->replot();
 
-        row++; // 本目标处理完毕，行数加 1
+        row++;
     }
 
     fixAllPlotTitles();
@@ -3021,18 +3250,15 @@ void MainWindow::updateTab2Plots() {
     }
 
     // ========================================================
-    // 【终极修复】：每次刷新帧时，动态读取各自下拉框当前的颜色状态，避免重置
-    // 增加多屏穿透能力：无论下拉框是在主窗口还是弹出的独立窗口中，都能精确找到！
+    // 【终极修复】：全屏穿透扫描颜色，防止弹窗后丢失风格
     // ========================================================
     auto getGrad = [this](const QString& objName) -> QCPColorGradient {
-        // 第一步：先在全局应用程序范围的所有窗口里搜寻这个名字的 ComboBox
         QComboBox* cmb = nullptr;
         for (QWidget* widget : QApplication::topLevelWidgets()) {
             cmb = widget->findChild<QComboBox*>(objName);
             if (cmb) break;
         }
 
-        // 如果实在是找不到，才返回默认值
         if (!cmb) return QCPColorGradient::gpJet;
 
         int idx = cmb->currentIndex();
@@ -3043,15 +3269,14 @@ void MainWindow::updateTab2Plots() {
         return QCPColorGradient::gpJet;
     };
 
-    cmapCbf->setGradient(getGrad("cmbColorTab2_CBF")); // 动态读取 CBF 专属颜色
-
+    cmapCbf->setGradient(getGrad("cmbColorTab2_CBF"));
     cmapCbf->setInterpolate(true);
     cmapCbf->setDataRange(QCPRange(cbf_max - 20.0, cbf_max)); cmapCbf->setTightBoundary(true);
     m_cbfWaterfallPlot->xAxis->setLabel("方位角/°"); m_cbfWaterfallPlot->yAxis->setLabel("物理时间/s");
     m_cbfWaterfallPlot->yAxis->setRange(min_time, max_time);
     m_cbfWaterfallPlot->replot(); updatePlotOriginalRange(m_cbfWaterfallPlot);
 
-    cmapDcv->setGradient(getGrad("cmbColorTab2_DCV")); // 动态读取 DCV 专属颜色
+    cmapDcv->setGradient(getGrad("cmbColorTab2_DCV"));
     cmapDcv->setInterpolate(true);
     cmapDcv->setDataRange(QCPRange(dcv_max - 20.0, dcv_max)); cmapDcv->setTightBoundary(true);
     m_dcvWaterfallPlot->xAxis->setLabel("方位角/°"); m_dcvWaterfallPlot->yAxis->setLabel("物理时间/s");
@@ -3066,26 +3291,41 @@ void MainWindow::updateTab2Plots() {
     }
     QList<int> sortedIds = targetIds.values(); std::sort(sortedIds.begin(), sortedIds.end());
 
-    QList<QCustomPlot*> allPlots = m_sliceWidget->findChildren<QCustomPlot*>();
-    for (QCustomPlot* plot : allPlots) {
-        QString objName = plot->objectName();
-        if (objName.startsWith("slice_")) {
-            int plotTid = objName.split("_").last().toInt();
-            if (!targetIds.contains(plotTid)) {
-                // 【安全修复】：全局寻找并销毁外骨骼
-                QWidget* wrapper = this->findChild<QWidget*>(objName + "_wrapper");
-                if (wrapper) {
-                    wrapper->hide(); wrapper->deleteLater();
-                } else {
-                    plot->hide(); plot->deleteLater();
-                }
+    // ========================================================
+    // 【安全防线】：全局追踪所有的 slice_ 图表，防止弹窗状态下触发野指针崩溃
+    // ========================================================
+    QList<QCustomPlot*> allSlicePlots;
+    for (QWidget* w : QApplication::topLevelWidgets()) {
+        for (QCustomPlot* p : w->findChildren<QCustomPlot*>()) {
+            if (p->objectName().startsWith("slice_")) {
+                allSlicePlots.append(p);
             }
         }
     }
 
-    // 【新增】：获取当前下拉框的布局模式状态
+    for (QCustomPlot* plot : allSlicePlots) {
+        int plotTid = plot->objectName().split("_").last().toInt();
+        if (!targetIds.contains(plotTid)) {
+            QWidget* parentWin = plot->window();
+            if (parentWin != this) parentWin->close(); // 强行关闭弹窗使控件归位
+        }
+    }
+    QCoreApplication::processEvents();
+
+    for (QCustomPlot* plot : allSlicePlots) {
+        int plotTid = plot->objectName().split("_").last().toInt();
+        if (!targetIds.contains(plotTid)) {
+            QWidget* wrapper = this->findChild<QWidget*>(plot->objectName() + "_wrapper");
+            if (wrapper) {
+                wrapper->hide(); wrapper->deleteLater();
+            } else {
+                plot->hide(); plot->deleteLater();
+            }
+        }
+    }
+
     QComboBox* cmb = this->findChild<QComboBox*>("cmbLayoutMode");
-    bool isAutoFit = (cmb && cmb->currentIndex() == 1); // 提取是否自动挤压的布尔值
+    bool isAutoFit = (cmb && cmb->currentIndex() == 1);
     int minHeight = isAutoFit ? 0 : 250;
 
     int row = 0;
@@ -3126,28 +3366,22 @@ void MainWindow::updateTab2Plots() {
                 cbf_db[i] = std::max(-80.0, 10.0 * std::log10(v_cbf[i] / (max_cbf + 1e-12) + 1e-12));
             }
 
-            // ==== 修复 Tab2 CBF切片标题 ====
-                        QString cbfName = QString("slice_cbf_%1").arg(tid);
-                        QCustomPlot* pCbf = m_sliceWidget->findChild<QCustomPlot*>(cbfName);
-                        if (!pCbf) {
-                            pCbf = new QCustomPlot(m_sliceWidget); pCbf->setObjectName(cbfName); setupPlotInteraction(pCbf);
+            // ==== Tab2 CBF切片 (亮青色高亮风格) ====
+            QString cbfName = QString("slice_cbf_%1").arg(tid);
+            QCustomPlot* pCbf = m_sliceWidget->findChild<QCustomPlot*>(cbfName);
+            if (!pCbf) {
+                pCbf = new QCustomPlot(m_sliceWidget); pCbf->setObjectName(cbfName); setupPlotInteraction(pCbf);
+                pCbf->addGraph(); pCbf->graph(0)->setPen(QPen(QColor("#00cec9"), 2.0));
 
-                            // 【核心修改】：将原本黯淡的 Qt::gray 替换为极具穿透力的高亮青色（Cyan）
-                            pCbf->addGraph(); pCbf->graph(0)->setPen(QPen(QColor("#00cec9"), 2.0));
-
-                            QCPTextElement* titleCbf = new QCPTextElement(pCbf, "", QFont("sans", 10, QFont::Bold));
-                            titleCbf->setTextColor(QColor("#dcdde1"));
+                QCPTextElement* titleCbf = new QCPTextElement(pCbf, "", QFont("sans", 10, QFont::Bold));
+                titleCbf->setTextColor(QColor("#00cec9"));
                 pCbf->plotLayout()->insertRow(0);
                 pCbf->plotLayout()->addElement(0, 0, titleCbf);
 
                 pCbf->xAxis->setRange(m_currentConfig.lofarMin, m_currentConfig.lofarMax); pCbf->yAxis->setRange(-80, 5);
-                pCbf->xAxis->setVisible(true);
-                pCbf->xAxis->setLabel("频率 / Hz");
-
-                // 【核心修改 1】：强制废除 QCustomPlot 底层的 50x50 默认尺寸
+                pCbf->xAxis->setVisible(true); pCbf->xAxis->setLabel("频率 / Hz");
                 pCbf->setMinimumSize(0, minHeight);
 
-                // 【核心修改 2】：用包装器挂载，并动态加入 30px 高度补偿
                 QWidget* wCbf = wrapPlotWithRangeControl(pCbf, "切片频段(Hz):", 0, m_currentConfig.fs/2.0, m_currentConfig.lofarMin, m_currentConfig.lofarMax);
                 wCbf->setMinimumSize(0, isAutoFit ? 0 : minHeight + 30);
                 m_sliceLayout->addWidget(wCbf, row, 0);
@@ -3155,12 +3389,12 @@ void MainWindow::updateTab2Plots() {
             pCbf->graph(0)->setData(f_axis, cbf_db);
             if (auto* title = qobject_cast<QCPTextElement*>(pCbf->plotLayout()->element(0, 0))) {
                 title->setText(QString("目标%1 (约 %2°) - CBF").arg(tid).arg(avg_ang, 0, 'f', 1));
-                title->setTextColor(QColor("#dcdde1"));
+                title->setTextColor(QColor("#00cec9")); // 确保每帧刷新都不会变灰
             }
             pCbf->yAxis->setLabel("相对功率 / dB");
             pCbf->replot(); updatePlotOriginalRange(pCbf);
 
-            // ==== 修复 Tab2 DCV切片标题 ====
+            // ==== Tab2 DCV切片 ====
             QString dcvName = QString("slice_dcv_%1").arg(tid);
             QCustomPlot* pDcv = m_sliceWidget->findChild<QCustomPlot*>(dcvName);
             if (!pDcv) {
@@ -3174,11 +3408,8 @@ void MainWindow::updateTab2Plots() {
 
                 pDcv->xAxis->setRange(m_currentConfig.lofarMin, m_currentConfig.lofarMax); pDcv->yAxis->setRange(-80, 5);
                 pDcv->xAxis->setLabel("频率 / Hz");
-
-                // 【核心修改 3】：强制废除 QCustomPlot 底层的 50x50 默认尺寸
                 pDcv->setMinimumSize(0, minHeight);
 
-                // 【核心修改 4】：用包装器挂载，并动态加入 30px 高度补偿
                 QWidget* wDcv = wrapPlotWithRangeControl(pDcv, "切片频段(Hz):", 0, m_currentConfig.fs/2.0, m_currentConfig.lofarMin, m_currentConfig.lofarMax);
                 wDcv->setMinimumSize(0, isAutoFit ? 0 : minHeight + 30);
                 m_sliceLayout->addWidget(wDcv, row, 1);
